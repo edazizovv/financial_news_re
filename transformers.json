@@ -1,0 +1,4 @@
+{"StandardScaler": {},
+ "MinMaxScaler": {"feature_range": [[0, 1], [-1, 1]]},
+ "MaxAbsScaler": {},
+ "Normalizer": {"norm": ["l1", "l2", "max"]}}

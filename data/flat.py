@@ -24,6 +24,39 @@ dimension2 (variety of fields):
     2 = 1 + others from its config observ
     3 = 1 + news
     4 = 1 + others from its config observ + news
+
+dimension 3 (time axis specification):
+    no specification
+    simple ordering (1, 2, 3 ...)
+    day parameters (timestamp components):
+        year
+        season (summer, winter etc.)
+        month
+        week
+        day
+        part of day
+        hour
+        minute
+        second
+    general economy activity parameters: 
+        business day or not
+        business session or not
+        financial year
+    trading activity parameters: 
+        trading day or not
+        session is opened or not
+    relational -- timestamp components:
+        until/since next/last:
+            business day
+            business session
+            trading day
+            trading session
+            weekend
+            end of year
+            end of financial year
+            
+            ! special market events !
+        
 """
 
 
