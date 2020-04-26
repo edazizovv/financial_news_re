@@ -60,7 +60,7 @@ dimension 3 (time axis specification):
 """
 
 
-def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_lag):
+def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_lag, show_shapes=False, news_show=False):
 
     d = './data/data/rex.xlsx'
     data = pandas.read_excel(d)
@@ -86,18 +86,24 @@ def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_lag):
         the_batches.append(ff)
     quotes_data = pandas.concat(the_batches)
     quotes_data = quotes_data.sort_index(ascending=True)
-
+    if show_shapes:
+        print(quotes_data['open'].value_counts().shape)
+    
     quotes_data_lagged_values, quotes_data_lagged_columns = lag(array=quotes_data.values,
                                                                 names=quotes_data.columns.values,
                                                                 exactly=effect_horizon, appx='hori', ex=['ticker'])
     quotes_data = pandas.DataFrame(data=quotes_data_lagged_values, index=quotes_data.index.values,
                                    columns=quotes_data_lagged_columns)
-
+    if show_shapes:
+        print(quotes_data['open_hori1'].value_counts().shape)
+    
     for j in range(nn):
         quotes_data.iloc[:, 5 + j] = quotes_data.iloc[:, 5 + j] / quotes_data.iloc[:, j] - 1
     quotes_data = quotes_data.drop(columns=[quotes_data.columns.values[j] for j in range(nn)])
 
     quotes_data = quotes_data.dropna()
+    if show_shapes:
+        print(quotes_data['open_hori1'].value_counts().shape) 
 
     quotes_data_lagged_values, quotes_data_lagged_columns = lag(array=quotes_data.values,
                                                                 names=quotes_data.columns.values, upon=max_quotes_lag,
@@ -106,10 +112,16 @@ def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_lag):
                                           columns=quotes_data_lagged_columns)
 
     quotes_data_lagged = quotes_data_lagged.dropna()
+    if show_shapes:
+        print(quotes_data_lagged['open_hori1_LAG0'].value_counts().shape)
+    
     quotes_data_lagged = quotes_data_lagged.reset_index()
     quotes_data_lagged['index'] = quotes_data_lagged['index'].apply(func=to_date)
     the_data = quotes_data_lagged.merge(right=newstitle_frame, left_on='index', right_on='target_date')
-
+    print(newstitle_frame['title'].value_counts().shape)
+    if show_shapes:
+        print(the_data['open_hori1_LAG0'].value_counts().shape)
+    
     return the_data
 
 
