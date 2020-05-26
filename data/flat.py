@@ -176,52 +176,20 @@ async def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_
     beginning_date = datetime.datetime.combine(beginning_date, datetime.datetime.min.time())
     ending_date = datetime.datetime.combine(ending_date, datetime.datetime.min.time())
 
-    """
-    quotes_data = asyncio.run(call_them_all(tickers=target_quotes,
-                                            start_date=beginning_date, end_date=ending_date,
-                                            token=api_key))
-    """
     quotes_data = await call_them_all(tickers=target_quotes,
                                       start_date=beginning_date, end_date=ending_date,
                                       token=api_key)
     quotes_data = quotes_data.set_index(keys=['time', 'ticker'])
     quotes_data = quotes_data.sort_index(ascending=True)
-    nn = quotes_data.shape[1]
-    if show_shapes:
-        print(quotes_data['open'].value_counts().shape)
 
-    quotes_data_lagged_values, quotes_data_lagged_columns = lag(array=quotes_data.values,
-                                                                names=quotes_data.columns.values,
-                                                                exactly=effect_horizon, appx='hori', ex=['ticker'])
-    quotes_data = pandas.DataFrame(data=quotes_data_lagged_values, index=quotes_data.index.values,
-                                   columns=quotes_data_lagged_columns)
-    if show_shapes:
-        print(quotes_data['open_hori1'].value_counts().shape)
+    quotes_data = consequentive_lagger(frame=quotes_data, n_lags=effect_horizon, suffix='_HOZ')
 
-    for j in range(nn):
-        quotes_data.iloc[:, nn + j] = quotes_data.iloc[:, nn + j] / quotes_data.iloc[:, j] - 1
-    quotes_data = quotes_data.drop(columns=[quotes_data.columns.values[j] for j in range(nn)])
+    quotes_data = consequentive_pcter(frame=quotes_data, horizon=1)
 
-    quotes_data = quotes_data.dropna()
-    if show_shapes:
-        print(quotes_data['open_hori1'].value_counts().shape)
-
-    quotes_data_lagged_values, quotes_data_lagged_columns = lag(array=quotes_data.values,
-                                                                names=quotes_data.columns.values, upon=max_quotes_lag,
-                                                                ex=['ticker'])
-    quotes_data_lagged = pandas.DataFrame(data=quotes_data_lagged_values, index=quotes_data.index.values,
-                                          columns=quotes_data_lagged_columns)
-
-    quotes_data_lagged = quotes_data_lagged.dropna()
-    if show_shapes:
-        print(quotes_data_lagged['open_hori1_LAG0'].value_counts().shape)
-
-    quotes_data_lagged = quotes_data_lagged.reset_index()
-    quotes_data_lagged['index'] = quotes_data_lagged['index'].apply(func=to_date)
-    the_data = quotes_data_lagged.merge(right=newstitle_frame, left_on='index', right_on='target_date')
+    quotes_data = quotes_data.reset_index()
+    quotes_data['time'] = quotes_data['time'].apply(func=to_date)
+    the_data = quotes_data.merge(right=newstitle_frame, left_on='time', right_on='target_date')
     print(newstitle_frame['title'].value_counts().shape)
-    if show_shapes:
-        print(the_data['open_hori1_LAG0'].value_counts().shape)
 
     return the_data
 
@@ -231,7 +199,73 @@ def add_lag(x):
     return datetime.date(a.year, a.month, a.day)
 
 
-def lag(array, names, ex, upon=None, exactly=None, appx='LAG'):
+def lagger(frame, n_lags):
+    frame_ = frame.copy()
+    if frame_.index.nlevels == 1:
+        frame_ = frame_.shift(periods=n_lags, axis=0)
+    elif frame_.index.nlevels == 2:
+        for ix in frame_.index.levels[0]:
+            frame_.loc[[ix], :] = frame_.loc[[ix], :].shift(periods=n_lags, axis=0)
+    else:
+        raise NotImplemented()
+    return frame_
+
+
+def consequentive_lagger(frame, n_lags, exactly=True, keep_basic=True, suffix='_LAG'):
+    if exactly:
+        if keep_basic:
+            new_columns = [x + suffix + '0' for x in frame.columns.values] + [x + suffix + str(n_lags) for x in frame.columns.values]
+            frame = pandas.concat((frame, lagger(frame=frame, n_lags=n_lags)), axis=1)
+            frame.columns = new_columns
+        else:
+            new_columns = [x + suffix + str(n_lags) for x in frame.columns.values]
+            frame = lagger(frame=frame, n_lags=n_lags)
+            frame.columns = new_columns
+    else:
+        if keep_basic:
+            new_columns = [x + suffix + '0' for x in frame.columns.values]
+            frames = [frame]
+        else:
+            new_columns = []
+            frames = []
+        for j in numpy.arange(start=1, stop=(n_lags + 1)):
+            new_columns = new_columns + [x + suffix + str(j) for x in frame.columns.values]
+            frames.append(lagger(frame=frame, n_lags=j))
+        frame = pandas.concat(frames, axis=1)
+        frame.columns = new_columns
+    return frame
+
+
+def pcter(frame, n_lags):
+    frame_ = frame.copy()
+    if frame_.index.nlevels == 1:
+        frame_ = frame_.pct_change(periods=n_lags, axis=0)
+    elif frame_.index.nlevels == 2:
+        for ix in frame_.index.levels[0]:
+            frame_.loc[[ix], :] = frame_.loc[[ix], :].pct_change(periods=n_lags, axis=0)
+    else:
+        raise NotImplemented()
+    return frame_
+
+
+def consequentive_pcter(frame, horizon, exactly=True, suffix='_PCT'):
+    if exactly:
+        new_columns = [x + suffix + str(horizon) for x in frame.columns.values]
+        frame = pcter(frame=frame, n_lags=horizon)
+        frame.columns = new_columns
+    else:
+        new_columns = []
+        frames = []
+        for j in numpy.arange(start=1, stop=(horizon + 1)):
+            new_columns = new_columns + [x + suffix + str(j) for x in frame.columns.values]
+            frames.append(pcter(frame=frame, n_lags=j))
+        frame = pandas.concat(frames, axis=1)
+        frame.columns = new_columns
+    return frame
+
+def lag_old(array, names, ex=None, upon=None, exactly=None, appx='LAG'):
+    if ex is None:
+        ex = []
     if upon is not None:
         result, rname = [], []
         arra = array[:, [x not in ex for x in names]]
@@ -254,5 +288,9 @@ def lag(array, names, ex, upon=None, exactly=None, appx='LAG'):
                                  axis=1), numpy.concatenate((numpy.concatenate(rname), ex))
 
 
-def to_date(x):
+def to_date_old(x):
     return datetime.date(int(x[:4]), int(x[5:7]), int(x[8:]))
+
+
+def to_date(x):
+    return x.date()
