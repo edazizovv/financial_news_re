@@ -179,7 +179,7 @@ async def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_
     quotes_data = await call_them_all(tickers=target_quotes,
                                       start_date=beginning_date, end_date=ending_date,
                                       token=api_key)
-    quotes_data = quotes_data.set_index(keys=['time', 'ticker'])
+    quotes_data = quotes_data.set_index(keys=['ticker', 'time'])
     quotes_data = quotes_data.sort_index(ascending=True)
 
     quotes_data = consequentive_lagger(frame=quotes_data, n_lags=effect_horizon, suffix='_HOZ')
