@@ -182,12 +182,18 @@ async def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_
     quotes_data = quotes_data.set_index(keys=['ticker', 'time'])
     quotes_data = quotes_data.sort_index(ascending=True)
 
+    quotes_data = fill_all(frame=quotes_data, freq='T', zero_index_name='ticker', first_index_name='time')
+
     quotes_data = consequentive_lagger(frame=quotes_data, n_lags=effect_horizon, suffix='_HOZ')
 
     quotes_data = consequentive_pcter(frame=quotes_data, horizon=1)
 
     quotes_data = quotes_data.reset_index()
     quotes_data['time'] = quotes_data['time'].apply(func=to_date)
+    
+    print(quotes_data['time'])
+    print(newstitle_frame['target_date'])
+    
     the_data = quotes_data.merge(right=newstitle_frame, left_on='time', right_on='target_date')
     print(newstitle_frame['title'].value_counts().shape)
 
@@ -263,6 +269,7 @@ def consequentive_pcter(frame, horizon, exactly=True, suffix='_PCT'):
         frame.columns = new_columns
     return frame
 
+
 def lag_old(array, names, ex=None, upon=None, exactly=None, appx='LAG'):
     if ex is None:
         ex = []
@@ -294,3 +301,23 @@ def to_date_old(x):
 
 def to_date(x):
     return x.date()
+
+
+def filler(frame, date_start, date_end, freq, tz):
+    result = pandas.DataFrame(index=pandas.date_range(start=date_start, end=date_end, freq=freq, tz=tz),
+                              data=frame)
+    return result
+
+
+def fill_all(frame, freq, zero_index_name, first_index_name):
+    data = []
+    for ix0 in frame.index.levels[0]:
+        filled = filler(frame=frame.loc[ix0, :], date_start=frame.index.levels[1].min(), date_end=frame.index.levels[1].max(), freq=freq, tz=frame.index.levels[1][0].tz)
+        filled = filled.reset_index()
+        filled[zero_index_name] = ix0
+        filled = filled.rename(columns={'index': first_index_name})
+        data.append(filled)
+    data = pandas.concat(data, axis=0)
+    data = data.set_index(keys=[zero_index_name, first_index_name])
+    return data
+
