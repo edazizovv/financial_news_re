@@ -3,6 +3,8 @@ import pandas_datareader
 import datetime
 import itertools
 import numpy
+import json
+import sqlalchemy
 
 # https://github.com/Fatal1ty/tinkoff-api
 
@@ -189,12 +191,66 @@ async def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_
     quotes_data = consequentive_pcter(frame=quotes_data, horizon=1)
 
     quotes_data = quotes_data.reset_index()
-    quotes_data['time'] = quotes_data['time'].apply(func=to_date)
-    
-    print(quotes_data['time'])
-    print(newstitle_frame['target_date'])
-    
-    the_data = quotes_data.merge(right=newstitle_frame, left_on='time', right_on='target_date')
+    # quotes_data['time'] = quotes_data['time'].apply(func=to_date)
+
+    newstitle_frame['target_date'] = pandas.to_datetime(newstitle_frame['target_date'])
+    quotes_data['time'] = pandas.to_datetime(quotes_data['time'])
+
+    qd_tz = quotes_data.loc[0, 'time'].tz
+
+    def fix_tz(x):
+        return x.tz_localize(tz=qd_tz)
+
+    newstitle_frame['time'] = newstitle_frame['time'].apply(func=fix_tz)
+
+    def fixit(x):
+        return x.ceil(freq='T')
+
+    quotes_data['time'] = quotes_data['time'].apply(func=fixit)
+    newstitle_frame['time'] = newstitle_frame['time'].apply(func=fixit)
+
+    with open('E:/InverseStation/terminator_panel/users.json') as f:
+        users = json.load(f)
+
+    user, password = users['justiciar']['user'], users['justiciar']['password']
+
+    with open('E:/InverseStation/terminator_panel/servers.json') as f:
+        users = json.load(f)
+
+    host, port = users['GOLA']['host'], users['GOLA']['port']
+
+    dbname = 'tempbox'
+
+    connection_string = "postgresql+psycopg2://{}:{}@{}:{}/{}".format(user, password, host, port, dbname)
+    engine = sqlalchemy.create_engine(connection_string)
+    connection = engine.connect()
+
+    quotes_data.to_sql(name='quotes_data', con=connection, if_exists='replace', index=False)
+    newstitle_frame.to_sql(name='newstitle_frame', con=connection, if_exists='replace', index=False)
+
+    query = """
+    SELECT RS.*
+    FROM
+    	(SELECT NF."id"
+    		 , NF.title
+    		 , NF."lag"
+    		 , NF.target_date
+    		 , QD.*
+    	FROM
+    	public.newstitle_frame AS NF
+    	FULL OUTER JOIN
+    	public.quotes_data AS QD
+    	ON NF."time" = QD."time") AS RS
+    WHERE 37 = 37
+    ;
+    """
+
+    the_data = pandas.read_sql(sql=query, con=connection)
+
+    # print(quotes_data['time'])
+    # print(newstitle_frame['target_date'])
+    #
+    # the_data = quotes_data.merge(right=newstitle_frame, left_on='time', right_on='target_date')
     print(newstitle_frame['title'].value_counts().shape)
 
     return the_data
