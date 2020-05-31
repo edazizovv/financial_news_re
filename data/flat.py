@@ -171,13 +171,20 @@ async def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_
     lag_markers = pandas.DataFrame(data=lag_markers, columns=['id', 'lag'])
     newstitle_frame = newstitle_frame.merge(right=lag_markers, left_on=['id'], right_on=['id'])
 
-    newstitle_frame['target_date'] = newstitle_frame.apply(func=add_lag, axis=1)
-    beginning_date, ending_date = newstitle_frame['target_date'].min() - datetime.timedelta(
-        days=(max_quotes_lag + effect_horizon)), newstitle_frame['target_date'].max()
+    newstitle_frame['time'] = pandas.to_datetime(newstitle_frame['time'])
+    newstitle_frame['news_time'] = newstitle_frame['time'].copy()
+    # newstitle_frame['time'] = newstitle_frame.apply(func=add_lag, axis=1)
+    newstitle_frame['time'] = newstitle_frame['lag'].apply(func=minute_offset)
+    newstitle_frame['time'] = newstitle_frame['news_time'] + newstitle_frame['time']
+    beginning_date, ending_date = newstitle_frame['time'].min() - pandas.DateOffset(
+        minutes=(max_quotes_lag + effect_horizon)), newstitle_frame['time'].max()
 
-    beginning_date = datetime.datetime.combine(beginning_date, datetime.datetime.min.time())
-    ending_date = datetime.datetime.combine(ending_date, datetime.datetime.min.time())
+    # beginning_date = datetime.datetime.combine(beginning_date, datetime.datetime.min.time())
+    # ending_date = datetime.datetime.combine(ending_date, datetime.datetime.min.time())
 
+    print(beginning_date)
+    print(ending_date)
+    
     quotes_data = await call_them_all(tickers=target_quotes,
                                       start_date=beginning_date, end_date=ending_date,
                                       token=api_key)
@@ -193,7 +200,7 @@ async def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_
     quotes_data = quotes_data.reset_index()
     # quotes_data['time'] = quotes_data['time'].apply(func=to_date)
 
-    newstitle_frame['target_date'] = pandas.to_datetime(newstitle_frame['target_date'])
+    newstitle_frame['time'] = pandas.to_datetime(newstitle_frame['time'])
     quotes_data['time'] = pandas.to_datetime(quotes_data['time'])
 
     qd_tz = quotes_data.loc[0, 'time'].tz
@@ -234,7 +241,7 @@ async def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_
     	(SELECT NF."id"
     		 , NF.title
     		 , NF."lag"
-    		 , NF.target_date
+    		 , NF.news_time
     		 , QD.*
     	FROM
     	public.newstitle_frame AS NF
@@ -256,9 +263,15 @@ async def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_
     return the_data
 
 
+def minute_offset(x):
+    return pandas.DateOffset(minutes=x)
+
+
 def add_lag(x):
-    a = x['time'] + pandas.DateOffset(days=x['lag'])
-    return datetime.date(a.year, a.month, a.day)
+    # a = x['time'] + pandas.DateOffset(days=x['lag'])
+    # a = x['time'] + pandas.DateOffset(minutes=x['lag'])
+    # return datetime.date(a.year, a.month, a.day)
+    return x['time'] + pandas.DateOffset(minutes=x['lag'])
 
 
 def lagger(frame, n_lags):
@@ -301,10 +314,10 @@ def consequentive_lagger(frame, n_lags, exactly=True, keep_basic=True, suffix='_
 def pcter(frame, n_lags):
     frame_ = frame.copy()
     if frame_.index.nlevels == 1:
-        frame_ = frame_.pct_change(periods=n_lags, axis=0)
+        frame_ = frame_.pct_change(periods=n_lags, axis=0, fill_method=None)
     elif frame_.index.nlevels == 2:
         for ix in frame_.index.levels[0]:
-            frame_.loc[[ix], :] = frame_.loc[[ix], :].pct_change(periods=n_lags, axis=0)
+            frame_.loc[[ix], :] = frame_.loc[[ix], :].pct_change(periods=n_lags, axis=0, fill_method=None)
     else:
         raise NotImplemented()
     return frame_
