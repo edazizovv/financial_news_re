@@ -162,7 +162,7 @@ result = await call_them_all(tickers=tickers, start_date=start_date, end_date=en
 """
 
 
-async def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_lag, show_shapes=False, news_show=False):
+async def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_lag=None, show_shapes=False, news_show=False):
     d = './data/data/rex.xlsx'
     data = pandas.read_excel(d)
 
@@ -177,7 +177,7 @@ async def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_
     newstitle_frame['time'] = newstitle_frame['lag'].apply(func=minute_offset)
     newstitle_frame['time'] = newstitle_frame['news_time'] + newstitle_frame['time']
     beginning_date, ending_date = newstitle_frame['time'].min() - pandas.DateOffset(
-        minutes=(max_quotes_lag + effect_horizon)), newstitle_frame['time'].max()
+        minutes=effect_horizon), newstitle_frame['time'].max()
 
     # beginning_date = datetime.datetime.combine(beginning_date, datetime.datetime.min.time())
     # ending_date = datetime.datetime.combine(ending_date, datetime.datetime.min.time())
@@ -193,7 +193,7 @@ async def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_
 
     quotes_data = fill_all(frame=quotes_data, freq='T', zero_index_name='ticker', first_index_name='time')
 
-    quotes_data = consequentive_lagger(frame=quotes_data, n_lags=effect_horizon, suffix='_HOZ')
+    quotes_data = consequentive_lagger(frame=quotes_data, n_lags=effect_horizon, suffix='_HOZ', exactly=False)
 
     quotes_data = consequentive_pcter(frame=quotes_data, horizon=1)
 
