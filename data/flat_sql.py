@@ -8,77 +8,15 @@ import sqlalchemy
 
 # https://github.com/Fatal1ty/tinkoff-api
 
+def forma(x):
+    return str(x).replace('[', '').replace(']', '').replace("'", '')
+
 
 import asyncio
 from tinkoff.investments import (
     TinkoffInvestmentsRESTClient, Environment, CandleResolution
 )
 from tinkoff.investments.client.exceptions import TinkoffInvestmentsError
-
-
-def load_old(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_lag, show_shapes=False, news_show=False):
-    d = './data/data/rex.xlsx'
-    data = pandas.read_excel(d)
-
-    newstitle_frame = data[['id', 'time', 'title']]
-    lag_markers = list(itertools.product(newstitle_frame['id'].values, numpy.array(numpy.arange(news_horizon - 1)) + 1))
-    lag_markers = pandas.DataFrame(data=lag_markers, columns=['id', 'lag'])
-    newstitle_frame = newstitle_frame.merge(right=lag_markers, left_on=['id'], right_on=['id'])
-
-    newstitle_frame['target_date'] = newstitle_frame.apply(func=add_lag, axis=1)
-    beginning_date, ending_date = newstitle_frame['target_date'].min() - datetime.timedelta(
-        days=(max_quotes_lag + effect_horizon)), newstitle_frame['target_date'].max()
-
-    the_batches = []
-    for target_quote in target_quotes:
-        f = pandas_datareader.av.time_series.AVTimeSeriesReader(symbols=target_quote, function='TIME_SERIES_DAILY',
-                                                                start=beginning_date, end=ending_date,
-                                                                # retry_count=3, pause=0.1, session=None, chunksize=25,
-                                                                api_key=api_key)
-
-        ff = f.read()
-        nn = ff.shape[1]
-        ff['ticker'] = target_quote
-        the_batches.append(ff)
-    quotes_data = pandas.concat(the_batches)
-    quotes_data = quotes_data.sort_index(ascending=True)
-    if show_shapes:
-        print(quotes_data['open'].value_counts().shape)
-
-    quotes_data_lagged_values, quotes_data_lagged_columns = lag(array=quotes_data.values,
-                                                                names=quotes_data.columns.values,
-                                                                exactly=effect_horizon, appx='hori', ex=['ticker'])
-    quotes_data = pandas.DataFrame(data=quotes_data_lagged_values, index=quotes_data.index.values,
-                                   columns=quotes_data_lagged_columns)
-    if show_shapes:
-        print(quotes_data['open_hori1'].value_counts().shape)
-
-    for j in range(nn):
-        quotes_data.iloc[:, 5 + j] = quotes_data.iloc[:, 5 + j] / quotes_data.iloc[:, j] - 1
-    quotes_data = quotes_data.drop(columns=[quotes_data.columns.values[j] for j in range(nn)])
-
-    quotes_data = quotes_data.dropna()
-    if show_shapes:
-        print(quotes_data['open_hori1'].value_counts().shape)
-
-    quotes_data_lagged_values, quotes_data_lagged_columns = lag(array=quotes_data.values,
-                                                                names=quotes_data.columns.values, upon=max_quotes_lag,
-                                                                ex=['ticker'])
-    quotes_data_lagged = pandas.DataFrame(data=quotes_data_lagged_values, index=quotes_data.index.values,
-                                          columns=quotes_data_lagged_columns)
-
-    quotes_data_lagged = quotes_data_lagged.dropna()
-    if show_shapes:
-        print(quotes_data_lagged['open_hori1_LAG0'].value_counts().shape)
-
-    quotes_data_lagged = quotes_data_lagged.reset_index()
-    quotes_data_lagged['index'] = quotes_data_lagged['index'].apply(func=to_date)
-    the_data = quotes_data_lagged.merge(right=newstitle_frame, left_on='index', right_on='target_date')
-    print(newstitle_frame['title'].value_counts().shape)
-    if show_shapes:
-        print(the_data['open_hori1_LAG0'].value_counts().shape)
-
-    return the_data
 
 
 async def show_my_time_candles(ticker, token, start_date, end_date, interval=CandleResolution.MIN_1):
@@ -162,7 +100,8 @@ result = await call_them_all(tickers=tickers, start_date=start_date, end_date=en
 """
 
 
-async def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_lag=None, show_shapes=False, news_show=False):
+async def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_lag=None, show_shapes=False,
+               news_show=False):
     d = './data/data/rex.xlsx'
     data = pandas.read_excel(d)
 
@@ -179,47 +118,18 @@ async def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_
     beginning_date, ending_date = newstitle_frame['time'].min() - pandas.DateOffset(
         minutes=effect_horizon), newstitle_frame['time'].max()
 
-    # beginning_date = datetime.datetime.combine(beginning_date, datetime.datetime.min.time())
-    # ending_date = datetime.datetime.combine(ending_date, datetime.datetime.min.time())
+    beginning_date = datetime.datetime.combine(beginning_date, datetime.datetime.min.time())
+    ending_date = datetime.datetime.combine(ending_date, datetime.datetime.min.time())
 
     print(beginning_date)
     print(ending_date)
-    
+
     quotes_data = await call_them_all(tickers=target_quotes,
                                       start_date=beginning_date, end_date=ending_date,
                                       token=api_key)
-    quotes_data = quotes_data.set_index(keys=['ticker', 'time'])
-    quotes_data = quotes_data.sort_index(ascending=True)
 
-    quotes_data = fill_all(frame=quotes_data, freq='T', zero_index_name='ticker', first_index_name='time')
 
-    quotes_data = consequentive_lagger(frame=quotes_data, n_lags=effect_horizon, suffix='_HOZ', exactly=False)
-
-    quotes_data = consequentive_pcter(frame=quotes_data, horizon=1)
-
-    quotes_data = quotes_data.reset_index()
-
-    print(quotes_data.shape)
-    print(quotes_data.columns)
-    print(quotes_data)
-
-    # quotes_data['time'] = quotes_data['time'].apply(func=to_date)
-
-    newstitle_frame['time'] = pandas.to_datetime(newstitle_frame['time'])
-    quotes_data['time'] = pandas.to_datetime(quotes_data['time'])
-
-    qd_tz = quotes_data.loc[0, 'time'].tz
-
-    def fix_tz(x):
-        return x.tz_localize(tz=qd_tz)
-
-    newstitle_frame['time'] = newstitle_frame['time'].apply(func=fix_tz)
-
-    def fixit(x):
-        return x.ceil(freq='T')
-
-    quotes_data['time'] = quotes_data['time'].apply(func=fixit)
-    newstitle_frame['time'] = newstitle_frame['time'].apply(func=fixit)
+    # --------------
 
     with open('E:/InverseStation/terminator_panel/users.json') as f:
         users = json.load(f)
@@ -237,7 +147,235 @@ async def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_
     engine = sqlalchemy.create_engine(connection_string)
     connection = engine.connect()
 
-    quotes_data.to_sql(name='quotes_data', con=connection, if_exists='replace', index=False)
+
+    # filler
+    temp_name = 'temp_tbl'
+    mid_name = 'mid_table'
+
+    quotes_data.to_sql(name=temp_name, con=connection, if_exists='replace', index=False)
+
+    pre_query = """
+    CREATE TEMPORARY TABLE temp_table AS 
+        SELECT generate_series(TIMESTAMP WITH TIME ZONE '{0}', TIMESTAMP WITH TIME ZONE '{1}', '1 minute') AS "time"
+    ;
+    """.format(beginning_date, ending_date)
+    connection.execute(pre_query)
+    cc = [temp_name + '.' + x for x in quotes_data.columns if x not in ['time', 'ticker']]
+
+    mid_query = """
+    CREATE TEMPORARY TABLE {2} AS
+    
+        SELECT src.time, src.ticker, {1}
+        FROM 
+             {0}
+             
+             RIGHT JOIN 
+             
+             (SELECT *
+             FROM
+             
+             temp_table
+             
+             CROSS JOIN
+             
+             (SELECT DISTINCT ticker
+             FROM {0}) AS krol
+             ) AS src
+             
+             
+             ON {0}.time = src.time AND {0}.ticker = src.ticker
+    ;
+    """.format(temp_name, forma(cc), mid_name)
+    # print(mid_query)
+    # quotes_data = pandas.read_sql(sql=mid_query, con=connection)
+    connection.execute(mid_query)
+
+    # lagger
+
+    # data.to_sql(name=temp_name, con=conn, if_exists='replace', index=False)
+
+    get_cols = """
+    SELECT *
+    FROM {0}
+    LIMIT 1
+    ;
+    """.format(mid_name)
+    identifiers = ['ticker']
+    identifiers_and_time = ['time'] + identifiers
+    lagging_columns = [x for x in pandas.read_sql(sql=get_cols, con=connection).columns.values if x not in identifiers_and_time]
+    # print(lagging_columns)
+    lag_alias = 'LAG'
+    n_lags = effect_horizon
+    for column in lagging_columns:
+        query_execute = """
+        -- https://stackoverflow.com/questions/13289304/postgresql-dynamic-value-as-table-name
+        DO
+        $$
+        DECLARE t_name TEXT;
+        DECLARE c_name TEXT;
+        DECLARE c_type TEXT;
+        DECLARE l_alias TEXT;
+        DECLARE n_lags INT;
+        BEGIN
+        t_name = '{0}';
+        c_name = '{1}';
+        l_alias = '{2}';
+        n_lags = {3};
+        SELECT data_type FROM information_schema.columns
+        WHERE 37=37
+        AND table_name = t_name
+        AND column_name = c_name
+        INTO c_type;
+        EXECUTE format('
+                       ALTER TABLE %%I
+                       ADD COLUMN tmp_id TEXT;
+                       UPDATE %%I
+                       SET tmp_id = CONCAT({5});',
+                       t_name,
+                       t_name);
+        FOR i IN 1..n_lags LOOP
+            EXECUTE format('
+                           ALTER TABLE %%I
+                           ADD COLUMN %%I %%s ;
+                           WITH new_cc AS
+                           (
+                           SELECT tmp_id, LAG(%%I, %%s) OVER (PARTITION BY {4}) AS lg
+                           FROM %%I
+                           )
+                           UPDATE %%I
+                           SET %%I = new_cc.lg
+                           FROM new_cc
+                           WHERE %%I.tmp_id = new_cc.tmp_id', 
+                           t_name,
+                           c_name || '_' || l_alias || i, 
+                           c_type,
+                           c_name, 
+                           i,
+                           t_name,
+                           t_name,
+                           c_name || '_LAG' || i,
+                           t_name);
+        END LOOP;
+        EXECUTE format('
+                       ALTER TABLE %%I
+                       DROP COLUMN tmp_id; ',
+                       t_name);
+        END;
+        $$ LANGUAGE plpgsql;
+        """.format(mid_name, column, lag_alias, n_lags, forma(identifiers), forma(identifiers_and_time))
+        # .format(temp_name, column, lag_alias, n_lags, forma(identifiers), forma(identifiers_and_time))
+        # print(query_execute)
+        connection.execute(query_execute)
+
+    query_select = """
+    SELECT *
+    FROM {0}
+    ;
+    """.format(mid_name)
+    # .format(temp_name)
+    # data = pandas.read_sql(sql=query_select, con=connection)
+    # print(data)
+    # raise Exception("Hands UP!")
+
+    # pcter
+
+    get_cols = """
+    SELECT *
+    FROM {0}
+    LIMIT 1
+    """.format(mid_name)
+
+    identifiers = ['ticker']
+    identifiers_and_time = ['time'] + identifiers
+    columns = [x for x in pandas.read_sql(sql=get_cols, con=connection).columns.values if x not in identifiers_and_time]
+    print(columns)
+    for column in columns:
+        query_execute = """
+        DO
+        $$
+        DECLARE t_name TEXT;
+        DECLARE c_name TEXT;
+        BEGIN
+        t_name = '{0}';
+        c_name = '{1}';
+        EXECUTE format('
+                       ALTER TABLE %%I
+                       ADD COLUMN tmp_id TEXT;
+                       UPDATE %%I
+                       SET tmp_id = CONCAT({3});',
+                       t_name,
+                       t_name);
+        EXECUTE format('
+                       WITH new_cc AS
+                       (
+                       SELECT tmp_id, (%%I / LAG(%%I, 1) OVER (PARTITION BY {2}) - 1) AS pc
+                       FROM %%I
+                       )
+                       UPDATE %%I
+                       SET %%I = new_cc.pc
+                       FROM new_cc
+                       WHERE %%I.tmp_id = new_cc.tmp_id', 
+                       c_name, 
+                       c_name, 
+                       t_name,
+                       t_name,  
+                       c_name,
+                       t_name);
+        EXECUTE format('
+                       ALTER TABLE %%I
+                       DROP COLUMN tmp_id; ',
+                       t_name);
+        END;
+        $$ LANGUAGE plpgsql;
+        """.format(mid_name, column, forma(identifiers), forma(identifiers_and_time))
+        print(query_execute)
+        connection.execute(query_execute)
+
+    read_quotes = """
+    SELECT *
+    FROM {0}
+    ;
+    """.format(mid_name)
+
+    quotes_data = pandas.read_sql(sql=read_quotes, con=connection)
+
+    print(quotes_data)
+    # quotes_data = quotes_data.set_index(keys=['ticker', 'time'])
+    # quotes_data = quotes_data.sort_index(ascending=True)
+    '''
+    quotes_data = fill_all(frame=quotes_data, freq='T', zero_index_name='ticker', first_index_name='time')
+    
+    quotes_data = consequentive_lagger(frame=quotes_data, n_lags=effect_horizon, suffix='_HOZ', exactly=False)
+    
+    quotes_data = consequentive_pcter(frame=quotes_data, horizon=1)
+
+    quotes_data = quotes_data.reset_index()
+
+    print(quotes_data.shape)
+    print(quotes_data.columns)
+    print(quotes_data)
+    '''
+    # quotes_data['time'] = quotes_data['time'].apply(func=to_date)
+    print(1)
+
+    newstitle_frame['time'] = pandas.to_datetime(newstitle_frame['time'])
+    # quotes_data['time'] = pandas.to_datetime(quotes_data['time'])
+
+    qd_tz = quotes_data.loc[0, 'time'].tz
+
+    def fix_tz(x):
+        return x.tz_localize(tz=qd_tz)
+
+    newstitle_frame['time'] = newstitle_frame['time'].apply(func=fix_tz)
+
+    def fixit(x):
+        return x.ceil(freq='T')
+
+    # quotes_data['time'] = quotes_data['time'].apply(func=fixit)
+    newstitle_frame['time'] = newstitle_frame['time'].apply(func=fixit)
+    print(2)
+
+    # quotes_data.to_sql(name='quotes_data', con=connection, if_exists='replace', index=False)
     newstitle_frame.to_sql(name='newstitle_frame', con=connection, if_exists='replace', index=False)
 
     query = """
@@ -251,12 +389,12 @@ async def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_
     	FROM
     	public.newstitle_frame AS NF
     	FULL OUTER JOIN
-    	public.quotes_data AS QD
+    	public.{0} AS QD
     	ON NF."time" = QD."time") AS RS
     WHERE 37 = 37
     ;
-    """
-
+    """.format(mid_name)
+    print(3)
     the_data = pandas.read_sql(sql=query, con=connection)
 
     # print(quotes_data['time'])
@@ -264,7 +402,7 @@ async def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_
     #
     # the_data = quotes_data.merge(right=newstitle_frame, left_on='time', right_on='target_date')
     print(newstitle_frame['title'].value_counts().shape)
-
+    print(4)
     return the_data
 
 
@@ -294,7 +432,8 @@ def lagger(frame, n_lags):
 def consequentive_lagger(frame, n_lags, exactly=True, keep_basic=True, suffix='_LAG'):
     if exactly:
         if keep_basic:
-            new_columns = [x + suffix + '0' for x in frame.columns.values] + [x + suffix + str(n_lags) for x in frame.columns.values]
+            new_columns = [x + suffix + '0' for x in frame.columns.values] + [x + suffix + str(n_lags) for x in
+                                                                              frame.columns.values]
             frame = pandas.concat((frame, lagger(frame=frame, n_lags=n_lags)), axis=1)
             frame.columns = new_columns
         else:
@@ -386,7 +525,8 @@ def filler(frame, date_start, date_end, freq, tz):
 def fill_all(frame, freq, zero_index_name, first_index_name):
     data = []
     for ix0 in frame.index.levels[0]:
-        filled = filler(frame=frame.loc[ix0, :], date_start=frame.index.levels[1].min(), date_end=frame.index.levels[1].max(), freq=freq, tz=frame.index.levels[1][0].tz)
+        filled = filler(frame=frame.loc[ix0, :], date_start=frame.index.levels[1].min(),
+                        date_end=frame.index.levels[1].max(), freq=freq, tz=frame.index.levels[1][0].tz)
         filled = filled.reset_index()
         filled[zero_index_name] = ix0
         filled = filled.rename(columns={'index': first_index_name})
