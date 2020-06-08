@@ -13,7 +13,9 @@ import sqlalchemy
 class Loader:
 
     def __init__(self, api_key, target_quotes, news_horizon, effect_horizon, db_config, reload_quotes=False,
-                 news_titles_source=None):
+                 news_titles_source=None, verbose=False):
+
+        self.verbose = verbose
 
         self.api_key = api_key
         self.target_quotes = target_quotes
@@ -33,6 +35,9 @@ class Loader:
 
     def establish_connection(self):
 
+        if self.verbose:
+            print('Establishing Connection')
+
         with open(self.db_config) as f:
             db_config = json.load(f)
 
@@ -45,6 +50,9 @@ class Loader:
         self.connection = engine.connect()
 
     def prepare_news_titles_frame(self):
+
+        if self.verbose:
+            print('Preparing News Titles Frame')
 
         if self.news_titles_source is not None:
             self.news_titles_frame = pandas.read_excel(self.news_titles_source)
@@ -67,29 +75,30 @@ class Loader:
             # to sql !
 
             news_titles_final_query = """
-            WITH cutta AS
-            (
-            SELECT id, time, title
-            FROM {0}
-            ),
-            listed AS
-            (
-            SELECT generate_series(1, {1}) AS lags
-            ),
-            identified AS
-            (
-            SELECT DISTINCT id
-            FROM {0}
-            ),
-            crossy AS
-            (
-            SELECT identified.id, listed.lags
-            FROM
-            identified
-            CROSS JOIN
-            listed
-            )
             CREATE TEMPORARY TABLE {2} AS
+            
+                WITH cutta AS
+                (
+                SELECT id, time, title
+                FROM {0}
+                ),
+                listed AS
+                (
+                SELECT generate_series(1, {1}) AS lags
+                ),
+                identified AS
+                (
+                SELECT DISTINCT id
+                FROM {0}
+                ),
+                crossy AS
+                (
+                SELECT identified.id, listed.lags
+                FROM
+                identified
+                CROSS JOIN
+                listed
+                )
                 SELECT cutta.id, cutta.time AS news_time, title, (cutta.time + (crossy.lags * INTERVAL '1 minute')) AS time
                 FROM
                 cutta
@@ -102,6 +111,9 @@ class Loader:
             self.connection.execute(news_titles_final_query)
 
     def get_dates(self):
+
+        if self.verbose:
+            print('Getting Dates')
 
         beginning_date_query = """
         SELECT (MIN(time) - ({1} * INTERVAL '1 minute')) AS mn
@@ -118,15 +130,32 @@ class Loader:
 
         return beginning_date, ending_date
 
-    def prepare_quotes(self):
+    async def call_quotes(self):
+
+        beginning_date, ending_date = self.get_dates()
+
+        self.quotes_frame = await call_them_all(tickers=self.target_quotes, start_date=beginning_date,
+                                                end_date=ending_date, token=self.api_key)
+
+    async def prepare_quotes(self):
+
+        if self.verbose:
+            print('Preparing Quotes')
 
         if self.reload_quotes:
-            beginning_date, ending_date = self.get_dates()
-            self.quotes_frame = await call_them_all(tickers=self.target_quotes, start_date=beginning_date,
-                                                    end_date=ending_date, token=self.api_key)
+
+            # loop = asyncio.get_event_loop()
+            # loop.run_until_complete(self.call_quotes())
+            # loop.close()
+
+            await self.call_quotes()
+
             self.quotes_frame.to_sql(name=self.quotes_alias, con=self.connection, if_exists='replace', index=False)
 
     def quotes_fill(self):
+
+        if self.verbose:
+            print('Filling Quotes')
 
         beginning_date, ending_date = self.get_dates()
 
@@ -174,6 +203,9 @@ class Loader:
         self.connection.execute(mid_query)
 
     def quotes_lag(self):
+
+        if self.verbose:
+            print('Lagging Quotes')
 
         get_cols = """
         SELECT *
@@ -250,6 +282,9 @@ class Loader:
 
     def quotes_percent(self):
 
+        if self.verbose:
+            print('Evaluating Quotes Percents')
+
         get_cols = """
         SELECT *
         FROM {0}
@@ -303,11 +338,14 @@ class Loader:
 
             self.connection.execute(query_execute)
 
-    def read(self):
+    async def read(self):
+
+        if self.verbose:
+            print('Reading')
 
         self.establish_connection()
         self.prepare_news_titles_frame()
-        self.prepare_quotes()
+        await self.prepare_quotes()
         self.quotes_fill()
         self.quotes_lag()
         self.quotes_percent()
