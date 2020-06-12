@@ -9,9 +9,10 @@ import json
 import sqlalchemy
 
 from tinkoff_api.quotes_loader import call_them_all
+from m_utils.transform import lag_it, percent_it, fill_it
 
 
-def forma(x):
+def sql_formatting(x):
     return str(x).replace('[', '').replace(']', '').replace("'", '')
 
 
@@ -283,14 +284,14 @@ class Loader:
     
                      ON {0}.time = src.time AND {0}.ticker = src.ticker
             ;
-            """.format(self.quotes_alias, forma(cc), self.mid_name)
+            """.format(self.quotes_alias, sql_formatting(cc), self.mid_name)
             self.connection.execute(mid_query)
 
         else:
 
             self.quotes_frame = self.quotes_frame.set_index(keys=['ticker', 'time'])
             self.quotes_frame = self.quotes_frame.sort_index(ascending=True)
-            self.quotes_frame = fill_all(frame=self.quotes_frame, freq='T', zero_index_name='ticker', first_index_name='time')
+            self.quotes_frame = fill_it(frame=self.quotes_frame, freq='T', zero_index_name='ticker', first_index_name='time')
             self.quotes_frame = self.quotes_frame.reset_index()
 
         if self.timeit:
@@ -376,14 +377,14 @@ class Loader:
                                t_name);
                 END;
                 $$ LANGUAGE plpgsql;
-                """.format(self.mid_name, column, lag_alias, n_lags, forma(identifiers), forma(identifiers_and_time))
+                """.format(self.mid_name, column, lag_alias, n_lags, sql_formatting(identifiers), sql_formatting(identifiers_and_time))
                 self.connection.execute(query_execute)
 
         else:
 
             self.quotes_frame = self.quotes_frame.set_index(keys=['ticker', 'time'])
             self.quotes_frame = self.quotes_frame.sort_index(ascending=True)
-            self.quotes_frame = consequentive_lagger(frame=self.quotes_frame, n_lags=self.effect_horizon, suffix='_LAG', exactly=False)
+            self.quotes_frame = lag_it(frame=self.quotes_frame, n_lags=self.effect_horizon, suffix='_LAG', exactly=False)
             self.quotes_frame = self.quotes_frame.reset_index()
 
         if self.timeit:
@@ -448,7 +449,7 @@ class Loader:
                                t_name);
                 END;
                 $$ LANGUAGE plpgsql;
-                """.format(self.mid_name, column, forma(identifiers), forma(identifiers_and_time))
+                """.format(self.mid_name, column, sql_formatting(identifiers), sql_formatting(identifiers_and_time))
 
                 self.connection.execute(query_execute)
 
@@ -456,7 +457,7 @@ class Loader:
 
             self.quotes_frame = self.quotes_frame.set_index(keys=['ticker', 'time'])
             self.quotes_frame = self.quotes_frame.sort_index(ascending=True)
-            self.quotes_frame = consequentive_pcter(frame=self.quotes_frame, horizon=1)
+            self.quotes_frame = percent_it(frame=self.quotes_frame, horizon=1)
             self.quotes_frame = self.quotes_frame.reset_index()
 
         if self.timeit:
@@ -500,89 +501,3 @@ class Loader:
             the_data = self.quotes_frame.merge(right=self.news_titles_frame, left_on='time', right_on='time')
 
         return the_data
-
-
-def lagger(frame, n_lags):
-    frame_ = frame.copy()
-    if frame_.index.nlevels == 1:
-        frame_ = frame_.shift(periods=n_lags, axis=0)
-    elif frame_.index.nlevels == 2:
-        for ix in frame_.index.levels[0]:
-            frame_.loc[[ix], :] = frame_.loc[[ix], :].shift(periods=n_lags, axis=0)
-    else:
-        raise NotImplemented()
-    return frame_
-
-
-def consequentive_lagger(frame, n_lags, exactly=True, keep_basic=True, suffix='_LAG'):
-    if exactly:
-        if keep_basic:
-            new_columns = [x + suffix + '0' for x in frame.columns.values] + [x + suffix + str(n_lags) for x in
-                                                                              frame.columns.values]
-            frame = pandas.concat((frame, lagger(frame=frame, n_lags=n_lags)), axis=1)
-            frame.columns = new_columns
-        else:
-            new_columns = [x + suffix + str(n_lags) for x in frame.columns.values]
-            frame = lagger(frame=frame, n_lags=n_lags)
-            frame.columns = new_columns
-    else:
-        if keep_basic:
-            new_columns = [x + suffix + '0' for x in frame.columns.values]
-            frames = [frame]
-        else:
-            new_columns = []
-            frames = []
-        for j in numpy.arange(start=1, stop=(n_lags + 1)):
-            new_columns = new_columns + [x + suffix + str(j) for x in frame.columns.values]
-            frames.append(lagger(frame=frame, n_lags=j))
-        frame = pandas.concat(frames, axis=1)
-        frame.columns = new_columns
-    return frame
-
-
-def pcter(frame, n_lags):
-    frame_ = frame.copy()
-    if frame_.index.nlevels == 1:
-        frame_ = frame_.pct_change(periods=n_lags, axis=0, fill_method=None)
-    elif frame_.index.nlevels == 2:
-        for ix in frame_.index.levels[0]:
-            frame_.loc[[ix], :] = frame_.loc[[ix], :].pct_change(periods=n_lags, axis=0, fill_method=None)
-    else:
-        raise NotImplemented()
-    return frame_
-
-
-def consequentive_pcter(frame, horizon, exactly=True, suffix='_PCT'):
-    if exactly:
-        new_columns = [x + str(horizon) for x in frame.columns.values]
-        frame = pcter(frame=frame, n_lags=horizon)
-        frame.columns = new_columns
-    else:
-        new_columns = []
-        frames = []
-        for j in numpy.arange(start=1, stop=(horizon + 1)):
-            new_columns = new_columns + [x + str(j) for x in frame.columns.values]
-            frames.append(pcter(frame=frame, n_lags=j))
-        frame = pandas.concat(frames, axis=1)
-        frame.columns = new_columns
-    return frame
-
-
-def filler(frame, date_start, date_end, freq, tz):
-    result = pandas.DataFrame(index=pandas.date_range(start=date_start, end=date_end, freq=freq, tz=tz),
-                              data=frame)
-    return result
-
-
-def fill_all(frame, freq, zero_index_name, first_index_name):
-    data = []
-    for ix0 in frame.index.levels[0]:
-        filled = filler(frame=frame.loc[ix0, :], date_start=frame.index.levels[1].min(),
-                        date_end=frame.index.levels[1].max(), freq=freq, tz=frame.index.levels[1][0].tz)
-        filled = filled.reset_index()
-        filled[zero_index_name] = ix0
-        filled = filled.rename(columns={'index': first_index_name})
-        data.append(filled)
-    data = pandas.concat(data, axis=0)
-    data = data.set_index(keys=[zero_index_name, first_index_name])
-    return data
