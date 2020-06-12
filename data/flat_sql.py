@@ -8,7 +8,8 @@ import json
 import sqlalchemy
 
 
-# https://github.com/Fatal1ty/tinkoff-api
+def forma(x):
+    return str(x).replace('[', '').replace(']', '').replace("'", '')
 
 
 class Loader:
@@ -151,6 +152,9 @@ class Loader:
                     itertools.product(self.news_titles_frame['id'].values, numpy.array(numpy.arange(self.news_horizon - 1)) + 1))
                 lag_markers = pandas.DataFrame(data=lag_markers, columns=['id', 'lag'])
                 self.news_titles_frame = self.news_titles_frame.merge(right=lag_markers, left_on=['id'], right_on=['id'])
+
+                def minute_offset(x):
+                    return pandas.DateOffset(minutes=x)
 
                 self.news_titles_frame['time'] = pandas.to_datetime(self.news_titles_frame['time'])
                 self.news_titles_frame['news_time'] = self.news_titles_frame['time'].copy()
@@ -495,17 +499,12 @@ class Loader:
         return the_data
 
 
-def forma(x):
-    return str(x).replace('[', '').replace(']', '').replace("'", '')
-
-
-import asyncio
 from tinkoff.investments import (
     TinkoffInvestmentsRESTClient, Environment, CandleResolution
 )
 from tinkoff.investments.client.exceptions import TinkoffInvestmentsError
 
-
+# https://github.com/Fatal1ty/tinkoff-api
 async def show_my_time_candles(ticker, token, start_date, end_date, interval=CandleResolution.MIN_1):
     try:
         async with TinkoffInvestmentsRESTClient(
@@ -577,332 +576,6 @@ async def call_them_all(tickers, start_date, end_date, token):
     return result
 
 
-"""
-Example of use
-
-tickers = ['AAPL', 'MSFT', 'INTC']
-start_date, end_date = datetime(2020, 1, 1), datetime(2020, 3, 1)
-
-result = await call_them_all(tickers=tickers, start_date=start_date, end_date=end_date, token=token)
-"""
-
-
-async def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_lag=None, show_shapes=False,
-               news_show=False):
-    d = './data/data/rex.xlsx'
-    data = pandas.read_excel(d)
-
-    newstitle_frame = data[['id', 'time', 'title']]
-    lag_markers = list(itertools.product(newstitle_frame['id'].values, numpy.array(numpy.arange(news_horizon - 1)) + 1))
-    lag_markers = pandas.DataFrame(data=lag_markers, columns=['id', 'lag'])
-    newstitle_frame = newstitle_frame.merge(right=lag_markers, left_on=['id'], right_on=['id'])
-
-    newstitle_frame['time'] = pandas.to_datetime(newstitle_frame['time'])
-    newstitle_frame['news_time'] = newstitle_frame['time'].copy()
-    # newstitle_frame['time'] = newstitle_frame.apply(func=add_lag, axis=1)
-    newstitle_frame['time'] = newstitle_frame['lag'].apply(func=minute_offset)
-    newstitle_frame['time'] = newstitle_frame['news_time'] + newstitle_frame['time']
-    beginning_date, ending_date = newstitle_frame['time'].min() - pandas.DateOffset(
-        minutes=effect_horizon), newstitle_frame['time'].max()
-
-    beginning_date = datetime.datetime.combine(beginning_date, datetime.datetime.min.time())
-    ending_date = datetime.datetime.combine(ending_date, datetime.datetime.min.time())
-
-    print(beginning_date)
-    print(ending_date)
-
-    quotes_data = await call_them_all(tickers=target_quotes,
-                                      start_date=beginning_date, end_date=ending_date,
-                                      token=api_key)
-
-    # --------------
-
-    with open('E:/InverseStation/terminator_panel/users.json') as f:
-        users = json.load(f)
-
-    user, password = users['justiciar']['user'], users['justiciar']['password']
-
-    with open('E:/InverseStation/terminator_panel/servers.json') as f:
-        users = json.load(f)
-
-    host, port = users['GOLA']['host'], users['GOLA']['port']
-
-    dbname = 'tempbox'
-
-    connection_string = "postgresql+psycopg2://{}:{}@{}:{}/{}".format(user, password, host, port, dbname)
-    engine = sqlalchemy.create_engine(connection_string)
-    connection = engine.connect()
-
-    # filler
-    temp_name = 'temp_tbl'
-    mid_name = 'mid_table'
-
-    quotes_data.to_sql(name=temp_name, con=connection, if_exists='replace', index=False)
-
-    pre_query = """
-    CREATE TEMPORARY TABLE temp_table AS 
-        SELECT generate_series(TIMESTAMP WITH TIME ZONE '{0}', TIMESTAMP WITH TIME ZONE '{1}', '1 minute') AS "time"
-    ;
-    """.format(beginning_date, ending_date)
-    connection.execute(pre_query)
-    cc = [temp_name + '.' + x for x in quotes_data.columns if x not in ['time', 'ticker']]
-
-    mid_query = """
-    CREATE TEMPORARY TABLE {2} AS
-    
-        SELECT src.time, src.ticker, {1}
-        FROM 
-             {0}
-             
-             RIGHT JOIN 
-             
-             (SELECT *
-             FROM
-             
-             temp_table
-             
-             CROSS JOIN
-             
-             (SELECT DISTINCT ticker
-             FROM {0}) AS krol
-             ) AS src
-             
-             
-             ON {0}.time = src.time AND {0}.ticker = src.ticker
-    ;
-    """.format(temp_name, forma(cc), mid_name)
-    # print(mid_query)
-    # quotes_data = pandas.read_sql(sql=mid_query, con=connection)
-    connection.execute(mid_query)
-
-    # lagger
-
-    # data.to_sql(name=temp_name, con=conn, if_exists='replace', index=False)
-
-    get_cols = """
-    SELECT *
-    FROM {0}
-    LIMIT 1
-    ;
-    """.format(mid_name)
-    identifiers = ['ticker']
-    identifiers_and_time = ['time'] + identifiers
-    lagging_columns = [x for x in pandas.read_sql(sql=get_cols, con=connection).columns.values if
-                       x not in identifiers_and_time]
-    # print(lagging_columns)
-    lag_alias = 'LAG'
-    n_lags = effect_horizon
-    for column in lagging_columns:
-        query_execute = """
-        -- https://stackoverflow.com/questions/13289304/postgresql-dynamic-value-as-table-name
-        DO
-        $$
-        DECLARE t_name TEXT;
-        DECLARE c_name TEXT;
-        DECLARE c_type TEXT;
-        DECLARE l_alias TEXT;
-        DECLARE n_lags INT;
-        BEGIN
-        t_name = '{0}';
-        c_name = '{1}';
-        l_alias = '{2}';
-        n_lags = {3};
-        SELECT data_type FROM information_schema.columns
-        WHERE 37=37
-        AND table_name = t_name
-        AND column_name = c_name
-        INTO c_type;
-        EXECUTE format('
-                       ALTER TABLE %%I
-                       ADD COLUMN tmp_id TEXT;
-                       UPDATE %%I
-                       SET tmp_id = CONCAT({5});',
-                       t_name,
-                       t_name);
-        FOR i IN 1..n_lags LOOP
-            EXECUTE format('
-                           ALTER TABLE %%I
-                           ADD COLUMN %%I %%s ;
-                           WITH new_cc AS
-                           (
-                           SELECT tmp_id, LAG(%%I, %%s) OVER (PARTITION BY {4}) AS lg
-                           FROM %%I
-                           )
-                           UPDATE %%I
-                           SET %%I = new_cc.lg
-                           FROM new_cc
-                           WHERE %%I.tmp_id = new_cc.tmp_id', 
-                           t_name,
-                           c_name || '_' || l_alias || i, 
-                           c_type,
-                           c_name, 
-                           i,
-                           t_name,
-                           t_name,
-                           c_name || '_LAG' || i,
-                           t_name);
-        END LOOP;
-        EXECUTE format('
-                       ALTER TABLE %%I
-                       DROP COLUMN tmp_id; ',
-                       t_name);
-        END;
-        $$ LANGUAGE plpgsql;
-        """.format(mid_name, column, lag_alias, n_lags, forma(identifiers), forma(identifiers_and_time))
-        # .format(temp_name, column, lag_alias, n_lags, forma(identifiers), forma(identifiers_and_time))
-        # print(query_execute)
-        connection.execute(query_execute)
-
-    query_select = """
-    SELECT *
-    FROM {0}
-    ;
-    """.format(mid_name)
-    # .format(temp_name)
-    # data = pandas.read_sql(sql=query_select, con=connection)
-    # print(data)
-    # raise Exception("Hands UP!")
-
-    # pcter
-
-    get_cols = """
-    SELECT *
-    FROM {0}
-    LIMIT 1
-    """.format(mid_name)
-
-    identifiers = ['ticker']
-    identifiers_and_time = ['time'] + identifiers
-    columns = [x for x in pandas.read_sql(sql=get_cols, con=connection).columns.values if x not in identifiers_and_time]
-    print(columns)
-    for column in columns:
-        query_execute = """
-        DO
-        $$
-        DECLARE t_name TEXT;
-        DECLARE c_name TEXT;
-        BEGIN
-        t_name = '{0}';
-        c_name = '{1}';
-        EXECUTE format('
-                       ALTER TABLE %%I
-                       ADD COLUMN tmp_id TEXT;
-                       UPDATE %%I
-                       SET tmp_id = CONCAT({3});',
-                       t_name,
-                       t_name);
-        EXECUTE format('
-                       WITH new_cc AS
-                       (
-                       SELECT tmp_id, (%%I / LAG(%%I, 1) OVER (PARTITION BY {2}) - 1) AS pc
-                       FROM %%I
-                       )
-                       UPDATE %%I
-                       SET %%I = new_cc.pc
-                       FROM new_cc
-                       WHERE %%I.tmp_id = new_cc.tmp_id', 
-                       c_name, 
-                       c_name, 
-                       t_name,
-                       t_name,  
-                       c_name,
-                       t_name);
-        EXECUTE format('
-                       ALTER TABLE %%I
-                       DROP COLUMN tmp_id; ',
-                       t_name);
-        END;
-        $$ LANGUAGE plpgsql;
-        """.format(mid_name, column, forma(identifiers), forma(identifiers_and_time))
-        print(query_execute)
-        connection.execute(query_execute)
-
-    read_quotes = """
-    SELECT *
-    FROM {0}
-    ;
-    """.format(mid_name)
-
-    quotes_data = pandas.read_sql(sql=read_quotes, con=connection)
-
-    print(quotes_data)
-    # quotes_data = quotes_data.set_index(keys=['ticker', 'time'])
-    # quotes_data = quotes_data.sort_index(ascending=True)
-    '''
-    quotes_data = fill_all(frame=quotes_data, freq='T', zero_index_name='ticker', first_index_name='time')
-    
-    quotes_data = consequentive_lagger(frame=quotes_data, n_lags=effect_horizon, suffix='_HOZ', exactly=False)
-    
-    quotes_data = consequentive_pcter(frame=quotes_data, horizon=1)
-
-    quotes_data = quotes_data.reset_index()
-
-    print(quotes_data.shape)
-    print(quotes_data.columns)
-    print(quotes_data)
-    '''
-    # quotes_data['time'] = quotes_data['time'].apply(func=to_date)
-    print(1)
-
-    newstitle_frame['time'] = pandas.to_datetime(newstitle_frame['time'])
-    # quotes_data['time'] = pandas.to_datetime(quotes_data['time'])
-
-    qd_tz = quotes_data.loc[0, 'time'].tz
-
-    def fix_tz(x):
-        return x.tz_localize(tz=qd_tz)
-
-    newstitle_frame['time'] = newstitle_frame['time'].apply(func=fix_tz)
-
-    def fixit(x):
-        return x.ceil(freq='T')
-
-    # quotes_data['time'] = quotes_data['time'].apply(func=fixit)
-    newstitle_frame['time'] = newstitle_frame['time'].apply(func=fixit)
-    print(2)
-
-    # quotes_data.to_sql(name='quotes_data', con=connection, if_exists='replace', index=False)
-    newstitle_frame.to_sql(name='newstitle_frame', con=connection, if_exists='replace', index=False)
-
-    query = """
-    SELECT RS.*
-    FROM
-    	(SELECT NF."id"
-    		 , NF.title
-    		 , NF."lag"
-    		 , NF.news_time
-    		 , QD.*
-    	FROM
-    	public.newstitle_frame AS NF
-    	FULL OUTER JOIN
-    	public.{0} AS QD
-    	ON NF."time" = QD."time") AS RS
-    WHERE 37 = 37
-    ;
-    """.format(mid_name)
-    print(3)
-    the_data = pandas.read_sql(sql=query, con=connection)
-
-    # print(quotes_data['time'])
-    # print(newstitle_frame['target_date'])
-    #
-    # the_data = quotes_data.merge(right=newstitle_frame, left_on='time', right_on='target_date')
-    print(newstitle_frame['title'].value_counts().shape)
-    print(4)
-    return the_data
-
-
-def minute_offset(x):
-    return pandas.DateOffset(minutes=x)
-
-
-def add_lag(x):
-    # a = x['time'] + pandas.DateOffset(days=x['lag'])
-    # a = x['time'] + pandas.DateOffset(minutes=x['lag'])
-    # return datetime.date(a.year, a.month, a.day)
-    return x['time'] + pandas.DateOffset(minutes=x['lag'])
-
-
 def lagger(frame, n_lags):
     frame_ = frame.copy()
     if frame_.index.nlevels == 1:
@@ -967,39 +640,6 @@ def consequentive_pcter(frame, horizon, exactly=True, suffix='_PCT'):
         frame = pandas.concat(frames, axis=1)
         frame.columns = new_columns
     return frame
-
-
-def lag_old(array, names, ex=None, upon=None, exactly=None, appx='LAG'):
-    if ex is None:
-        ex = []
-    if upon is not None:
-        result, rname = [], []
-        arra = array[:, [x not in ex for x in names]]
-        for j in range((upon + 1)):
-            re = numpy.roll(arra, shift=j, axis=0)
-            re[:j] = numpy.nan
-            result.append(re)
-            rname.append([x + '_{}{}'.format(appx, j) for x in names if x not in ex])
-        return numpy.concatenate((numpy.concatenate(result, axis=1), array[:, [x in ex for x in names]]),
-                                 axis=1), numpy.concatenate((numpy.concatenate(rname), ex))
-    if exactly is not None:
-        result, rname = [], []
-        arra = array[:, [x not in ex for x in names]]
-        for j in [0, exactly]:
-            re = numpy.roll(arra, shift=j, axis=0)
-            re[:j] = numpy.nan
-            result.append(re)
-            rname.append([x + '_{}{}'.format(appx, j) for x in names if x not in ex])
-        return numpy.concatenate((numpy.concatenate(result, axis=1), array[:, [x in ex for x in names]]),
-                                 axis=1), numpy.concatenate((numpy.concatenate(rname), ex))
-
-
-def to_date_old(x):
-    return datetime.date(int(x[:4]), int(x[5:7]), int(x[8:]))
-
-
-def to_date(x):
-    return x.date()
 
 
 def filler(frame, date_start, date_end, freq, tz):
