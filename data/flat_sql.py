@@ -1,3 +1,4 @@
+#
 import time
 import pandas
 import pandas_datareader
@@ -6,6 +7,8 @@ import itertools
 import numpy
 import json
 import sqlalchemy
+
+from tinkoff_api.quotes_loader import call_them_all
 
 
 def forma(x):
@@ -497,83 +500,6 @@ class Loader:
             the_data = self.quotes_frame.merge(right=self.news_titles_frame, left_on='time', right_on='time')
 
         return the_data
-
-
-from tinkoff.investments import (
-    TinkoffInvestmentsRESTClient, Environment, CandleResolution
-)
-from tinkoff.investments.client.exceptions import TinkoffInvestmentsError
-
-# https://github.com/Fatal1ty/tinkoff-api
-async def show_my_time_candles(ticker, token, start_date, end_date, interval=CandleResolution.MIN_1):
-    try:
-        async with TinkoffInvestmentsRESTClient(
-                # token='TOKEN',
-                token=token,
-                environment=Environment.SANDBOX) as client:
-
-            instruments = await client.market.instruments.search(ticker)
-            instrument = instruments[0]
-            figi = instrument.figi
-
-            candles = await client.market.candles.get(
-                # figi='BBG000B9XRY4',
-                # figi=ticker,
-                figi=figi,
-                # dt_from=datetime(2019, 1, 1),
-                dt_from=start_date,
-                # dt_to=datetime(2019, 12, 31),
-                dt_to=end_date,
-                interval=interval
-            )
-            data = []
-            if len(candles) == 0:
-                data = pandas.DataFrame(columns=['time', 'open', 'close', 'high', 'low', 'volume'])
-            else:
-                for candle in candles:
-                    data.append(
-                        pandas.DataFrame(data=[[candle.time, candle.o, candle.c, candle.h, candle.l, candle.v]]))
-                    # print(f'{candle.time}: {candle.h}')
-                data = pandas.concat(data, axis=0)
-                data.columns = ['time', 'open', 'close', 'high', 'low', 'volume']
-        return data
-    except TinkoffInvestmentsError as e:
-        print(e)
-
-
-async def min_partitor(ticker, start_date, end_date, token):
-    diff = end_date - start_date
-    partitions_needed = diff > datetime.timedelta(days=1)
-    if partitions_needed:
-        result = []
-        for dd in range(diff.days):
-            # print(dd)
-            start_part = start_date + datetime.timedelta(days=dd)
-            end_part = start_date + datetime.timedelta(days=(dd + 1))
-            # print(start_part)
-            # print(end_part)
-            resy = await show_my_time_candles(ticker=ticker, start_date=start_part, end_date=end_part, token=token)
-            result.append(resy)
-        start_part = start_date + datetime.timedelta(days=diff.days)
-        end_part = end_date
-        if end_part - start_part >= datetime.timedelta(minutes=1):
-            resy = await show_my_time_candles(ticker=ticker, start_date=start_part, end_date=end_part, token=token)
-            result.append(resy)
-        result = pandas.concat(result, axis=0)
-    else:
-        result = await show_my_time_candles(ticker=ticker, start_date=start_date, end_date=end_date, token=token)
-    return result
-
-
-async def call_them_all(tickers, start_date, end_date, token):
-    result = []
-    for ticker in tickers:
-        resy = await min_partitor(ticker=ticker, start_date=start_date, end_date=end_date, token=token)
-        resy['ticker'] = ticker
-        result.append(resy)
-    result = pandas.concat(result, axis=0)
-
-    return result
 
 
 def lagger(frame, n_lags):
