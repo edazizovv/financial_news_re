@@ -1,8 +1,6 @@
 #
 import time
 import pandas
-import pandas_datareader
-import datetime
 import itertools
 import numpy
 import json
