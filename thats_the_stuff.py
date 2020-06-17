@@ -154,10 +154,10 @@ def goded(das_model, data, multiple_model_args, tsi_names, y_names, removes, tes
                  'd1', 'X_adj_'])
     X_train, Y_train, X_test, Y_test, X_ = load_data(data, y_names, removes, test_rate, n_folds)
 
-    smoothers = [Distributed, Distributed, Distributed, Distributed]
-    # smoothers = [Distributed]
-    smoothers_args = [{'my_name': 'Nothing'}, {'my_name': 'Simple'}, {'my_name': 'Normal'}, {'my_name': 'Uniform'}]
-    # smoothers_args = [{'my_name': 'Normal'}]
+    # smoothers = [Distributed, Distributed, Distributed, Distributed]
+    smoothers = [Distributed, Distributed, Distributed]
+    # smoothers_args = [{'my_name': 'Nothing'}, {'my_name': 'Simple'}, {'my_name': 'Normal'}, {'my_name': 'Uniform'}]
+    smoothers_args = [{'my_name': 'Nothing'}, {'my_name': 'Simple'}, {'my_name': 'Normal'}]
 
     verbose_step = 100
     n_iters = len(smoothers) * len(multiple_model_args)
