@@ -159,7 +159,7 @@ def goded(das_model, data, multiple_model_args, tsi_names, y_names, removes, tes
     # smoothers_args = [{'my_name': 'Nothing'}, {'my_name': 'Simple'}, {'my_name': 'Normal'}, {'my_name': 'Uniform'}]
     smoothers_args = [{'my_name': 'Nothing'}, {'my_name': 'Simple'}, {'my_name': 'Normal'}]
 
-    verbose_step = 100
+    verbose_step = 10
     n_iters = len(smoothers) * len(multiple_model_args)
     print('N of expected iters = {0}'.format(n_iters))
     print('Started search: {0}'.format(datetime.datetime.now().isoformat()))
@@ -183,9 +183,6 @@ def goded(das_model, data, multiple_model_args, tsi_names, y_names, removes, tes
         Y_train_ = [smoother_Y_train[z].forward(array=Y_train[z]) for z in range(len(Y_train))]
 
         for i in range(len(multiple_model_args)):
-
-            if it % verbose_step == 0:
-                print('{0} / {1}'.format(it, n_iters))
 
             params = multiple_model_args[i]
 
@@ -218,7 +215,11 @@ def goded(das_model, data, multiple_model_args, tsi_names, y_names, removes, tes
 
                 report = report.append(result, ignore_index=True)
 
-            it += 1
+                if it % verbose_step == 0:
+                    print('{0} / {1}'.format(it, n_iters))
+
+                it += 1
+
 
     print('{0} / {0}'.format(n_iters))
     print('Finished search: {0}'.format(datetime.datetime.now().isoformat()))
