@@ -160,7 +160,7 @@ def goded(das_model, data, multiple_model_args, tsi_names, y_names, removes, tes
     smoothers_args = [{'my_name': 'Nothing'}, {'my_name': 'Simple'}, {'my_name': 'Normal'}]
 
     verbose_step = 10
-    n_iters = len(smoothers) * len(multiple_model_args)
+    n_iters = len(smoothers) * len(multiple_model_args) * n_folds
     print('N of expected iters = {0}'.format(n_iters))
     print('Started search: {0}'.format(datetime.datetime.now().isoformat()))
 
