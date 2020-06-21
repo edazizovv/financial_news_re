@@ -17,12 +17,13 @@ def sql_formatting(x):
 class Loader:
 
     def __init__(self, api_key, target_quotes, news_horizon, effect_horizon, db_config, reload_quotes=False,
-                 news_titles_source=None, verbose=False, timeit=False, base_option='full'):
+                 news_titles_source=None, verbose=False, timeit=False, base_option='full', add_time_features=False):
 
         self.verbose = verbose
         self.timeit = timeit
         self.run_time = None
         self.base_option = base_option
+        self.add_time_features = add_time_features
 
         self.api_key = api_key
         self.target_quotes = target_quotes
@@ -461,6 +462,36 @@ class Loader:
         if self.timeit:
             self.do_time()
 
+    def time_features(self, the_data):
+
+        if self.add_time_features:
+
+            from busy_exchange.utils import BusyDayExchange, BusyTimeExchange
+
+            """
+            the_data['time'] = the_data['time'].dt.tz_convert('EST')
+
+            the_data['is_holi'] = the_data['time'].apply(func=BusyDayExchange.is_holi).astype(dtype=float)
+            the_data['is_full'] = the_data['time'].apply(func=BusyDayExchange.is_full).astype(dtype=float)
+            the_data['is_cut'] = the_data['time'].apply(func=BusyDayExchange.is_cut).astype(dtype=float)
+
+            the_data['to_holi'] = the_data['time'].apply(func=BusyDayExchange.to_holiday, args=(True,))
+            the_data['to_full'] = the_data['time'].apply(func=BusyDayExchange.to_fullday, args=(True,))
+            the_data['to_cut'] = the_data['time'].apply(func=BusyDayExchange.to_cutday, args=(True,))
+            the_data['af_holi'] = the_data['time'].apply(func=BusyDayExchange.to_holiday, args=(False,))
+            the_data['af_full'] = the_data['time'].apply(func=BusyDayExchange.to_fullday, args=(False,))
+            the_data['af_cut'] = the_data['time'].apply(func=BusyDayExchange.to_cutday, args=(False,))
+            """
+            the_data['mday'] = the_data['time'].dt.day
+            the_data['wday'] = the_data['time'].dt.dayofweek
+            the_data['hour'] = the_data['time'].dt.hour
+            the_data['minute'] = the_data['time'].dt.minute
+
+            # the_data['to_open'] = the_data['time'].apply(func=BusyTimeExchange.to_open)
+            # the_data['to_close'] = the_data['time'].apply(func=BusyTimeExchange.to_close)
+
+        return the_data
+
     async def read(self):
 
         if self.verbose:
@@ -497,5 +528,7 @@ class Loader:
         else:
 
             the_data = self.quotes_frame.merge(right=self.news_titles_frame, left_on='time', right_on='time')
+
+        the_data = self.time_features(the_data)
 
         return the_data
