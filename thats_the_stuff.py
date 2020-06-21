@@ -220,8 +220,61 @@ def goded(das_model, data, multiple_model_args, tsi_names, y_names, removes, tes
 
                 it += 1
 
-
     print('{0} / {0}'.format(n_iters))
     print('Finished search: {0}'.format(datetime.datetime.now().isoformat()))
 
     return report
+
+
+from mpydge.holy.data_keeper.keeper import Conductor
+
+
+def gonet(data_set, y_names, removes, categoricals, net, net_init_params, net_fit_params):
+
+    exclude = y_names + removes
+    x_names = [x for x in data_set.columns.values if (x not in exclude and 'LAG0' not in x)]
+    used_names = x_names + y_names
+    data_set = data_set[used_names]
+
+    categorical_columns = categoricals
+    numerical_columns = x_names
+
+    outputs = y_names
+
+    if categorical_columns is not None:
+        for category in categorical_columns:
+            data_set[category] = data_set[category].astype('category')
+    if numerical_columns is not None:
+        for numeric in numerical_columns:
+            data_set[numeric] = data_set[numeric].astype('float64')
+
+    data_set[outputs[0]] = data_set[outputs[0]].astype('category')
+
+    data = Conductor(data_frame=data_set, target=outputs)
+
+    net = net(data=data, **net_init_params)
+    print(net)
+
+    net_fit_params['optimiser'] = net_fit_params['optimiser'](net.parameters(), lr=0.001)
+
+    net.fit(**net_fit_params)
+    net.fit_plot()
+
+    from sklearn.metrics import mean_squared_error as MSE, r2_score as R2
+
+    summary_params = {'on': 'train',
+                      'loss_function': MSE,
+                      'score': R2}
+    net.summary(**summary_params)
+
+    summary_params = {'on': 'validation',
+                      'loss_function': MSE,
+                      'score': R2}
+    net.summary(**summary_params)
+
+    summary_params = {'on': 'test',
+                      'loss_function': MSE,
+                      'score': R2}
+    net.summary(**summary_params)
+
+    return None
