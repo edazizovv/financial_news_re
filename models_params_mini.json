@@ -29,7 +29,7 @@
 						 "max_features": ["auto"],
 						 "n_jobs": [-1]},
  "RandomForestRegressor": {"n_estimators": [1000],
-                           "max_depth": [null, 10, 5],
+                           "max_depth": [null, 10, 5, 2],
 						   "max_features": ["auto"],
 						   "n_jobs": [-1]},
  "LGBMRegressor": {"max_depth": [10, 5],
