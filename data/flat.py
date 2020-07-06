@@ -1,397 +1,419 @@
+#
+import os
+import time
 import pandas
-import pandas_datareader
-import datetime
 import itertools
 import numpy
 import json
 import sqlalchemy
 
-# https://github.com/Fatal1ty/tinkoff-api
+from tinkoff_api.quotes_loader import call_them_all
+from m_utils.transform import lag_it, percent_it, fill_it
 
 
-import asyncio
-from tinkoff.investments import (
-    TinkoffInvestmentsRESTClient, Environment, CandleResolution
-)
-from tinkoff.investments.client.exceptions import TinkoffInvestmentsError
+def sql_formatting(x):
+    return str(x).replace('[', '').replace(']', '').replace("'", '')
 
 
-def load_old(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_lag, show_shapes=False, news_show=False):
-    d = './data/data/rex.xlsx'
-    data = pandas.read_excel(d)
+class Loader:
 
-    newstitle_frame = data[['id', 'time', 'title']]
-    lag_markers = list(itertools.product(newstitle_frame['id'].values, numpy.array(numpy.arange(news_horizon - 1)) + 1))
-    lag_markers = pandas.DataFrame(data=lag_markers, columns=['id', 'lag'])
-    newstitle_frame = newstitle_frame.merge(right=lag_markers, left_on=['id'], right_on=['id'])
+    def __init__(self, api_key, target_quotes, news_horizon, effect_horizon, db_config, reload_quotes=False,
+                 news_titles_source=None, verbose=False, timeit=False, base_option='for_merge', add_time_features=False,
+                 nlp_treator=None, nlp_treator_signature=None, nlp_treator_config=None, nlp_ductor='post',
+                 export_chunk=100_000):
 
-    newstitle_frame['target_date'] = newstitle_frame.apply(func=add_lag, axis=1)
-    beginning_date, ending_date = newstitle_frame['target_date'].min() - datetime.timedelta(
-        days=(max_quotes_lag + effect_horizon)), newstitle_frame['target_date'].max()
+        self.verbose = verbose
+        self.timeit = timeit
+        self.run_time = None
+        self.base_option = base_option
+        self.add_time_features = add_time_features
 
-    the_batches = []
-    for target_quote in target_quotes:
-        f = pandas_datareader.av.time_series.AVTimeSeriesReader(symbols=target_quote, function='TIME_SERIES_DAILY',
-                                                                start=beginning_date, end=ending_date,
-                                                                # retry_count=3, pause=0.1, session=None, chunksize=25,
-                                                                api_key=api_key)
+        self.export_chunk = export_chunk
+        self.where_to_save = './result.csv'
 
-        ff = f.read()
-        nn = ff.shape[1]
-        ff['ticker'] = target_quote
-        the_batches.append(ff)
-    quotes_data = pandas.concat(the_batches)
-    quotes_data = quotes_data.sort_index(ascending=True)
-    if show_shapes:
-        print(quotes_data['open'].value_counts().shape)
+        self.nlp_treator = nlp_treator
+        self.nlp_treator_signature = nlp_treator_signature
+        self.nlp_treator_config = nlp_treator_config
+        self.nlp_ductor = nlp_ductor
 
-    quotes_data_lagged_values, quotes_data_lagged_columns = lag(array=quotes_data.values,
-                                                                names=quotes_data.columns.values,
-                                                                exactly=effect_horizon, appx='hori', ex=['ticker'])
-    quotes_data = pandas.DataFrame(data=quotes_data_lagged_values, index=quotes_data.index.values,
-                                   columns=quotes_data_lagged_columns)
-    if show_shapes:
-        print(quotes_data['open_hori1'].value_counts().shape)
+        self.api_key = api_key
+        self.target_quotes = target_quotes
+        self.news_horizon = news_horizon
+        self.effect_horizon = effect_horizon
+        self.db_config = db_config
+        self.reload_quotes = reload_quotes
+        self.news_titles_source = news_titles_source
+        self.connection = None
+        self.news_titles_frame = None
+        self.quotes_frame = None
 
-    for j in range(nn):
-        quotes_data.iloc[:, 5 + j] = quotes_data.iloc[:, 5 + j] / quotes_data.iloc[:, j] - 1
-    quotes_data = quotes_data.drop(columns=[quotes_data.columns.values[j] for j in range(nn)])
+        self.news_titles_alias = 'news_titles'
+        self.quotes_alias = 'quotes'
+        self.result_alias = 'result_table'
 
-    quotes_data = quotes_data.dropna()
-    if show_shapes:
-        print(quotes_data['open_hori1'].value_counts().shape)
+    def fix_time(self):
 
-    quotes_data_lagged_values, quotes_data_lagged_columns = lag(array=quotes_data.values,
-                                                                names=quotes_data.columns.values, upon=max_quotes_lag,
-                                                                ex=['ticker'])
-    quotes_data_lagged = pandas.DataFrame(data=quotes_data_lagged_values, index=quotes_data.index.values,
-                                          columns=quotes_data_lagged_columns)
+        self.run_time = time.time()
 
-    quotes_data_lagged = quotes_data_lagged.dropna()
-    if show_shapes:
-        print(quotes_data_lagged['open_hori1_LAG0'].value_counts().shape)
+    def do_time(self):
 
-    quotes_data_lagged = quotes_data_lagged.reset_index()
-    quotes_data_lagged['index'] = quotes_data_lagged['index'].apply(func=to_date)
-    the_data = quotes_data_lagged.merge(right=newstitle_frame, left_on='index', right_on='target_date')
-    print(newstitle_frame['title'].value_counts().shape)
-    if show_shapes:
-        print(the_data['open_hori1_LAG0'].value_counts().shape)
+        self.run_time = time.time() - self.run_time
+        print(self.run_time)
 
-    return the_data
+    def establish_connection(self):
 
+        if self.timeit:
+            self.fix_time()
 
-async def show_my_time_candles(ticker, token, start_date, end_date, interval=CandleResolution.MIN_1):
-    try:
-        async with TinkoffInvestmentsRESTClient(
-                # token='TOKEN',
-                token=token,
-                environment=Environment.SANDBOX) as client:
+        if self.base_option == 'for_merge':
 
-            instruments = await client.market.instruments.search(ticker)
-            instrument = instruments[0]
-            figi = instrument.figi
+            if self.verbose:
+                print('Establishing Connection')
 
-            candles = await client.market.candles.get(
-                # figi='BBG000B9XRY4',
-                # figi=ticker,
-                figi=figi,
-                # dt_from=datetime(2019, 1, 1),
-                dt_from=start_date,
-                # dt_to=datetime(2019, 12, 31),
-                dt_to=end_date,
-                interval=interval
-            )
-            data = []
-            if len(candles) == 0:
-                data = pandas.DataFrame(columns=['time', 'open', 'close', 'high', 'low', 'volume'])
+            with open(self.db_config) as f:
+                db_config = json.load(f)
+
+            user, password, host, port, dbname = db_config['user'], db_config['password'], db_config['host'], db_config[
+                'port'], db_config['dbname']
+
+            connection_string = "postgresql+psycopg2://{}:{}@{}:{}/{}".format(user, password, host, port, dbname)
+            engine = sqlalchemy.create_engine(connection_string)
+
+            self.connection = engine.connect()
+
+            if self.timeit:
+                self.do_time()
+
+        else:
+
+            if self.verbose:
+                print('Skipped Connection')
+
+    def prepare_news_titles_frame(self):
+
+        if self.timeit:
+            self.fix_time()
+
+        if self.verbose:
+            print('Preparing News Titles Frame')
+
+        if self.news_titles_source is None:
+            raise Exception("You should specify news titles source")
+
+        if self.news_titles_source is not None:
+
+            self.news_titles_frame = pandas.read_excel(self.news_titles_source)
+
+            self.news_titles_frame['time'] = pandas.to_datetime(self.news_titles_frame['time'])
+
+            def fix_tz(x):
+                return x.tz_localize(tz='UTC')
+
+            self.news_titles_frame['time'] = self.news_titles_frame['time'].apply(func=fix_tz)
+
+            def fixit(x):
+                return x.ceil(freq='T')
+
+            self.news_titles_frame['time'] = self.news_titles_frame['time'].apply(func=fixit)
+
+            if self.nlp_treator is not None and self.nlp_ductor == 'pre':
+                old_name = 'title'
+                new_name = 'Text'
+                self.news_titles_frame = self.news_titles_frame.rename(columns={old_name: new_name})
+                self.news_titles_frame = self.nlp_treator(self.news_titles_frame,
+                                                          self.nlp_treator_signature, self.nlp_treator_config)
+
+                self.news_titles_frame = self.nlp_treator(self.news_titles_frame,
+                                                          self.nlp_treator_signature, self.nlp_treator_config)
+
+                self.news_titles_frame = self.news_titles_frame.rename(columns={new_name: old_name})
+
+            # self.news_titles_frame = self.news_titles_frame[['id', 'time', 'title']]
+            self.news_titles_frame = self.news_titles_frame.drop(columns=['source', 'category'])
+            lag_markers = list(
+                itertools.product(self.news_titles_frame['id'].values,
+                                  numpy.array(numpy.arange(self.news_horizon - 1)) + 1))
+            lag_markers = pandas.DataFrame(data=lag_markers, columns=['id', 'lag'])
+            self.news_titles_frame = self.news_titles_frame.merge(right=lag_markers, left_on=['id'],
+                                                                  right_on=['id'])
+
+            def minute_offset(x):
+                return pandas.DateOffset(minutes=x)
+
+            self.news_titles_frame['time'] = pandas.to_datetime(self.news_titles_frame['time'])
+            self.news_titles_frame['news_time'] = self.news_titles_frame['time'].copy()
+            self.news_titles_frame['time'] = self.news_titles_frame['lag'].apply(func=minute_offset)
+            self.news_titles_frame['time'] = self.news_titles_frame['news_time'] + self.news_titles_frame['time']
+
+            if self.base_option == 'for_merge':
+                self.news_titles_frame.to_sql(name=self.news_titles_alias, con=self.connection,
+                                              if_exists='replace',
+                                              index=False)
+
+        if self.timeit:
+            self.do_time()
+
+    def get_dates(self):
+
+        if self.verbose:
+            print('Getting Dates')
+
+        if self.base_option == 'without':
+
+            beginning_date, ending_date = self.news_titles_frame['time'].min() - pandas.DateOffset(
+                minutes=self.effect_horizon), self.news_titles_frame['time'].max()
+
+        else:
+
+            beginning_date_query = """
+            SELECT (MIN(time) - ({1} * INTERVAL '1 minute')) AS mn
+            FROM {0}
+            """.format(self.news_titles_alias, self.effect_horizon)
+
+            ending_date_query = """
+            SELECT MAX(time) as mx
+            FROM {0}
+            """.format(self.news_titles_alias)
+
+            beginning_date = pandas.read_sql(sql=beginning_date_query, con=self.connection).values[0, 0]
+            ending_date = pandas.read_sql(sql=ending_date_query, con=self.connection).values[0, 0]
+
+        return beginning_date, ending_date
+
+    async def call_quotes(self):
+
+        beginning_date, ending_date = self.get_dates()
+
+        self.quotes_frame = await call_them_all(tickers=self.target_quotes, start_date=beginning_date,
+                                                end_date=ending_date, token=self.api_key)
+
+    async def prepare_quotes(self):
+
+        if self.timeit:
+            self.fix_time()
+
+        if self.verbose:
+            print('Preparing Quotes')
+
+        if self.reload_quotes:
+
+            await self.call_quotes()
+
+        if self.timeit:
+            self.do_time()
+
+    def quotes_fill(self):
+
+        if self.timeit:
+            self.fix_time()
+
+        if self.verbose:
+            print('Filling Quotes')
+
+        beginning_date, ending_date = self.get_dates()
+
+        self.quotes_frame = self.quotes_frame.set_index(keys=['ticker', 'time'])
+        self.quotes_frame = self.quotes_frame.sort_index(ascending=True)
+        self.quotes_frame = fill_it(frame=self.quotes_frame, freq='T', zero_index_name='ticker',
+                                    first_index_name='time')
+        self.quotes_frame = self.quotes_frame.reset_index()
+
+        if self.timeit:
+            self.do_time()
+
+    def quotes_lag(self):
+
+        if self.timeit:
+            self.fix_time()
+
+        if self.verbose:
+            print('Lagging Quotes')
+
+        self.quotes_frame = self.quotes_frame.set_index(keys=['ticker', 'time'])
+        self.quotes_frame = self.quotes_frame.sort_index(ascending=True)
+        self.quotes_frame = lag_it(frame=self.quotes_frame, n_lags=self.effect_horizon, suffix='_LAG',
+                                   exactly=False)
+        self.quotes_frame = self.quotes_frame.reset_index()
+
+        if self.timeit:
+            self.do_time()
+
+    def quotes_percent(self):
+
+        if self.timeit:
+            self.fix_time()
+
+        if self.verbose:
+            print('Evaluating Quotes Percents')
+
+        self.quotes_frame = self.quotes_frame.set_index(keys=['ticker', 'time'])
+        self.quotes_frame = self.quotes_frame.sort_index(ascending=True)
+        self.quotes_frame = percent_it(frame=self.quotes_frame, horizon=1)
+        self.quotes_frame = self.quotes_frame.reset_index()
+
+        if self.timeit:
+            self.do_time()
+
+    def time_features(self, the_data):
+
+        if self.add_time_features:
+            from busy_exchange.utils import BusyDayExchange, BusyTimeExchange
+
+            """
+            the_data['time'] = the_data['time'].dt.tz_convert('EST')
+
+            the_data['is_holi'] = the_data['time'].apply(func=BusyDayExchange.is_holi).astype(dtype=float)
+            the_data['is_full'] = the_data['time'].apply(func=BusyDayExchange.is_full).astype(dtype=float)
+            the_data['is_cut'] = the_data['time'].apply(func=BusyDayExchange.is_cut).astype(dtype=float)
+
+            the_data['to_holi'] = the_data['time'].apply(func=BusyDayExchange.to_holiday, args=(True,))
+            the_data['to_full'] = the_data['time'].apply(func=BusyDayExchange.to_fullday, args=(True,))
+            the_data['to_cut'] = the_data['time'].apply(func=BusyDayExchange.to_cutday, args=(True,))
+            the_data['af_holi'] = the_data['time'].apply(func=BusyDayExchange.to_holiday, args=(False,))
+            the_data['af_full'] = the_data['time'].apply(func=BusyDayExchange.to_fullday, args=(False,))
+            the_data['af_cut'] = the_data['time'].apply(func=BusyDayExchange.to_cutday, args=(False,))
+            """
+            the_data['mday'] = the_data['time'].dt.day
+            the_data['wday'] = the_data['time'].dt.dayofweek
+            the_data['hour'] = the_data['time'].dt.hour
+            the_data['minute'] = the_data['time'].dt.minute
+
+            # the_data['to_open'] = the_data['time'].apply(func=BusyTimeExchange.to_open)
+            # the_data['to_close'] = the_data['time'].apply(func=BusyTimeExchange.to_close)
+
+        return the_data
+
+    async def read(self):
+
+        if self.verbose:
+            print('Reading')
+
+        self.establish_connection()
+        self.prepare_news_titles_frame()
+        await self.prepare_quotes()
+        self.quotes_fill()
+        self.quotes_lag()
+        self.quotes_percent()
+
+        if self.base_option == 'for_merge':
+
+            self.quotes_frame.to_sql(name=self.quotes_alias, con=self.connection,
+                                                  if_exists='replace',
+                                                  index=False)
+
+            query = """
+            CREATE TEMPORARY TABLE {0} AS
+                 SELECT RS.*
+                 FROM
+                    (SELECT NF."id"
+                          , NF.title
+                          , NF."lag"
+                          , NF.news_time
+                          , QD.*
+                    FROM
+                    public.newstitle_frame AS NF
+                    FULL OUTER JOIN
+                    public.{1} AS QD
+                    ON NF."time" = QD."time") AS RS
+                 WHERE 37 = 37
+             ;
+             """.format(self.result_alias, self.quotes_alias)
+
+            self.connection.execute(query)
+
+            if self.export_chunk is None:
+
+                reader_query = """
+                SELECT *
+                FROM {0}
+                ;
+                """.format(self.result_alias)
+                the_data = pandas.read_sql(sql=reader_query, con=self.connection)
+
+                the_data = self.time_features(the_data)
+
+                if self.nlp_treator is not None and self.nlp_ductor == 'post':
+                    old_name = 'title'
+                    new_name = 'Text'
+                    the_data['title'] = the_data['title'].fillna('NoData')
+                    print('HUGO BOSS: to memory')
+                    the_data = the_data.rename(columns={old_name: new_name})
+                    the_data = self.nlp_treator(the_data,
+                                                self.nlp_treator_signature, self.nlp_treator_config)
+
+                    the_data = the_data.rename(columns={new_name: old_name})
+
+                    return the_data
+
             else:
-                for candle in candles:
-                    data.append(
-                        pandas.DataFrame(data=[[candle.time, candle.o, candle.c, candle.h, candle.l, candle.v]]))
-                    # print(f'{candle.time}: {candle.h}')
-                data = pandas.concat(data, axis=0)
-                data.columns = ['time', 'open', 'close', 'high', 'low', 'volume']
-        return data
-    except TinkoffInvestmentsError as e:
-        print(e)
 
+                size_query = """ 
+                SELECT COUNT(*)
+                FROM {0}
+                ;
+                """.format(self.result_alias)
+                final_table_d0_size = pandas.read_sql(sql=size_query, con=self.connection).values[0, 0]
+                n_chunks = (final_table_d0_size // self.export_chunk) + 1
+                chunks = [(j * self.export_chunk, (j + 1) * self.export_chunk - 1) for j in range(n_chunks)]
+                chunks[-1] = (chunks[-1][0], final_table_d0_size)
 
-async def min_partitor(ticker, start_date, end_date, token):
-    diff = end_date - start_date
-    partitions_needed = diff > datetime.timedelta(days=1)
-    if partitions_needed:
-        result = []
-        for dd in range(diff.days):
-            # print(dd)
-            start_part = start_date + datetime.timedelta(days=dd)
-            end_part = start_date + datetime.timedelta(days=(dd + 1))
-            # print(start_part)
-            # print(end_part)
-            resy = await show_my_time_candles(ticker=ticker, start_date=start_part, end_date=end_part, token=token)
-            result.append(resy)
-        start_part = start_date + datetime.timedelta(days=diff.days)
-        end_part = end_date
-        if end_part - start_part >= datetime.timedelta(minutes=1):
-            resy = await show_my_time_candles(ticker=ticker, start_date=start_part, end_date=end_part, token=token)
-            result.append(resy)
-        result = pandas.concat(result, axis=0)
-    else:
-        result = await show_my_time_candles(ticker=ticker, start_date=start_date, end_date=end_date, token=token)
-    return result
+                if self.verbose:
+                    print("Final table's D0:\t {0}\nChunks:\n{1}".format(final_table_d0_size, chunks))
 
+                iteration_columns_query = """
+                ALTER TABLE {0}
+                ADD COLUMN chunker SERIAL; 
+                """.format(self.result_alias)
 
-async def call_them_all(tickers, start_date, end_date, token):
-    result = []
-    for ticker in tickers:
-        resy = await min_partitor(ticker=ticker, start_date=start_date, end_date=end_date, token=token)
-        resy['ticker'] = ticker
-        result.append(resy)
-    result = pandas.concat(result, axis=0)
+                self.connection.execute(iteration_columns_query)
 
-    return result
+                if os.path.exists(self.where_to_save):
+                    os.remove(self.where_to_save)
 
+                for j in range(n_chunks):
 
-"""
-Example of use
+                    reader_query = """
+                    SELECT *
+                    FROM {0}
+                    WHERE chunker >= {1} and chunker <= {2}
+                    ;
+                    """.format(self.result_alias, chunks[j][0], chunks[j][1])
 
-tickers = ['AAPL', 'MSFT', 'INTC']
-start_date, end_date = datetime(2020, 1, 1), datetime(2020, 3, 1)
+                    data_chunk = pandas.read_sql(sql=reader_query, con=self.connection)
 
-result = await call_them_all(tickers=tickers, start_date=start_date, end_date=end_date, token=token)
-"""
+                    data_chunk = self.time_features(data_chunk)
 
+                    if self.nlp_treator is not None and self.nlp_ductor == 'post':
+                        old_name = 'title'
+                        new_name = 'Text'
+                        data_chunk['title'] = data_chunk['title'].fillna('NoData')
+                        print('HUGO BOSS: to disk')
+                        data_chunk = data_chunk.rename(columns={old_name: new_name})
+                        data_chunk = self.nlp_treator(data_chunk,
+                                                    self.nlp_treator_signature, self.nlp_treator_config)
 
-async def load(api_key, target_quotes, news_horizon, effect_horizon, max_quotes_lag=None, show_shapes=False, news_show=False):
-    d = './data/data/rex.xlsx'
-    data = pandas.read_excel(d)
+                        data_chunk = data_chunk.rename(columns={new_name: old_name})
 
-    newstitle_frame = data[['id', 'time', 'title']]
-    lag_markers = list(itertools.product(newstitle_frame['id'].values, numpy.array(numpy.arange(news_horizon - 1)) + 1))
-    lag_markers = pandas.DataFrame(data=lag_markers, columns=['id', 'lag'])
-    newstitle_frame = newstitle_frame.merge(right=lag_markers, left_on=['id'], right_on=['id'])
+                    data_chunk.columns = [x.replace('_PCT1', '') for x in data_chunk.columns.values]
+                    data_chunk = data_chunk.dropna().sort_values(by=['title', 'lag'])
+                    
+                    data_chunk.to_csv(self.where_to_save, sep=';', index=False, mode='a')
 
-    newstitle_frame['time'] = pandas.to_datetime(newstitle_frame['time'])
-    newstitle_frame['news_time'] = newstitle_frame['time'].copy()
-    # newstitle_frame['time'] = newstitle_frame.apply(func=add_lag, axis=1)
-    newstitle_frame['time'] = newstitle_frame['lag'].apply(func=minute_offset)
-    newstitle_frame['time'] = newstitle_frame['news_time'] + newstitle_frame['time']
-    beginning_date, ending_date = newstitle_frame['time'].min() - pandas.DateOffset(
-        minutes=effect_horizon), newstitle_frame['time'].max()
-
-    # beginning_date = datetime.datetime.combine(beginning_date, datetime.datetime.min.time())
-    # ending_date = datetime.datetime.combine(ending_date, datetime.datetime.min.time())
-
-    print(beginning_date)
-    print(ending_date)
-    
-    quotes_data = await call_them_all(tickers=target_quotes,
-                                      start_date=beginning_date, end_date=ending_date,
-                                      token=api_key)
-    quotes_data = quotes_data.set_index(keys=['ticker', 'time'])
-    quotes_data = quotes_data.sort_index(ascending=True)
-
-    quotes_data = fill_all(frame=quotes_data, freq='T', zero_index_name='ticker', first_index_name='time')
-
-    quotes_data = consequentive_lagger(frame=quotes_data, n_lags=effect_horizon, suffix='_HOZ', exactly=False)
-
-    quotes_data = consequentive_pcter(frame=quotes_data, horizon=1)
-
-    quotes_data = quotes_data.reset_index()
-
-    print(quotes_data.shape)
-    print(quotes_data.columns)
-    print(quotes_data)
-
-    # quotes_data['time'] = quotes_data['time'].apply(func=to_date)
-
-    newstitle_frame['time'] = pandas.to_datetime(newstitle_frame['time'])
-    quotes_data['time'] = pandas.to_datetime(quotes_data['time'])
-
-    qd_tz = quotes_data.loc[0, 'time'].tz
-
-    def fix_tz(x):
-        return x.tz_localize(tz=qd_tz)
-
-    newstitle_frame['time'] = newstitle_frame['time'].apply(func=fix_tz)
-
-    def fixit(x):
-        return x.ceil(freq='T')
-
-    quotes_data['time'] = quotes_data['time'].apply(func=fixit)
-    newstitle_frame['time'] = newstitle_frame['time'].apply(func=fixit)
-
-    with open('E:/InverseStation/terminator_panel/users.json') as f:
-        users = json.load(f)
-
-    user, password = users['justiciar']['user'], users['justiciar']['password']
-
-    with open('E:/InverseStation/terminator_panel/servers.json') as f:
-        users = json.load(f)
-
-    host, port = users['GOLA']['host'], users['GOLA']['port']
-
-    dbname = 'tempbox'
-
-    connection_string = "postgresql+psycopg2://{}:{}@{}:{}/{}".format(user, password, host, port, dbname)
-    engine = sqlalchemy.create_engine(connection_string)
-    connection = engine.connect()
-
-    quotes_data.to_sql(name='quotes_data', con=connection, if_exists='replace', index=False)
-    newstitle_frame.to_sql(name='newstitle_frame', con=connection, if_exists='replace', index=False)
-
-    query = """
-    SELECT RS.*
-    FROM
-    	(SELECT NF."id"
-    		 , NF.title
-    		 , NF."lag"
-    		 , NF.news_time
-    		 , QD.*
-    	FROM
-    	public.newstitle_frame AS NF
-    	FULL OUTER JOIN
-    	public.quotes_data AS QD
-    	ON NF."time" = QD."time") AS RS
-    WHERE 37 = 37
-    ;
-    """
-
-    the_data = pandas.read_sql(sql=query, con=connection)
-
-    # print(quotes_data['time'])
-    # print(newstitle_frame['target_date'])
-    #
-    # the_data = quotes_data.merge(right=newstitle_frame, left_on='time', right_on='target_date')
-    print(newstitle_frame['title'].value_counts().shape)
-
-    return the_data
-
-
-def minute_offset(x):
-    return pandas.DateOffset(minutes=x)
-
-
-def add_lag(x):
-    # a = x['time'] + pandas.DateOffset(days=x['lag'])
-    # a = x['time'] + pandas.DateOffset(minutes=x['lag'])
-    # return datetime.date(a.year, a.month, a.day)
-    return x['time'] + pandas.DateOffset(minutes=x['lag'])
-
-
-def lagger(frame, n_lags):
-    frame_ = frame.copy()
-    if frame_.index.nlevels == 1:
-        frame_ = frame_.shift(periods=n_lags, axis=0)
-    elif frame_.index.nlevels == 2:
-        for ix in frame_.index.levels[0]:
-            frame_.loc[[ix], :] = frame_.loc[[ix], :].shift(periods=n_lags, axis=0)
-    else:
-        raise NotImplemented()
-    return frame_
-
-
-def consequentive_lagger(frame, n_lags, exactly=True, keep_basic=True, suffix='_LAG'):
-    if exactly:
-        if keep_basic:
-            new_columns = [x + suffix + '0' for x in frame.columns.values] + [x + suffix + str(n_lags) for x in frame.columns.values]
-            frame = pandas.concat((frame, lagger(frame=frame, n_lags=n_lags)), axis=1)
-            frame.columns = new_columns
         else:
-            new_columns = [x + suffix + str(n_lags) for x in frame.columns.values]
-            frame = lagger(frame=frame, n_lags=n_lags)
-            frame.columns = new_columns
-    else:
-        if keep_basic:
-            new_columns = [x + suffix + '0' for x in frame.columns.values]
-            frames = [frame]
-        else:
-            new_columns = []
-            frames = []
-        for j in numpy.arange(start=1, stop=(n_lags + 1)):
-            new_columns = new_columns + [x + suffix + str(j) for x in frame.columns.values]
-            frames.append(lagger(frame=frame, n_lags=j))
-        frame = pandas.concat(frames, axis=1)
-        frame.columns = new_columns
-    return frame
 
+            the_data = self.quotes_frame.merge(right=self.news_titles_frame, left_on='time', right_on='time')
 
-def pcter(frame, n_lags):
-    frame_ = frame.copy()
-    if frame_.index.nlevels == 1:
-        frame_ = frame_.pct_change(periods=n_lags, axis=0, fill_method=None)
-    elif frame_.index.nlevels == 2:
-        for ix in frame_.index.levels[0]:
-            frame_.loc[[ix], :] = frame_.loc[[ix], :].pct_change(periods=n_lags, axis=0, fill_method=None)
-    else:
-        raise NotImplemented()
-    return frame_
+            the_data = self.time_features(the_data)
 
+            if self.nlp_treator is not None and self.nlp_ductor == 'post':
+                old_name = 'title'
+                new_name = 'Text'
+                the_data['title'] = the_data['title'].fillna('NoData')
+                print('HUGO BOSS: in memory')
+                the_data = the_data.rename(columns={old_name: new_name})
+                the_data = self.nlp_treator(the_data,
+                                            self.nlp_treator_signature, self.nlp_treator_config)
 
-def consequentive_pcter(frame, horizon, exactly=True, suffix='_PCT'):
-    if exactly:
-        new_columns = [x + suffix + str(horizon) for x in frame.columns.values]
-        frame = pcter(frame=frame, n_lags=horizon)
-        frame.columns = new_columns
-    else:
-        new_columns = []
-        frames = []
-        for j in numpy.arange(start=1, stop=(horizon + 1)):
-            new_columns = new_columns + [x + suffix + str(j) for x in frame.columns.values]
-            frames.append(pcter(frame=frame, n_lags=j))
-        frame = pandas.concat(frames, axis=1)
-        frame.columns = new_columns
-    return frame
+                the_data = the_data.rename(columns={new_name: old_name})
 
-
-def lag_old(array, names, ex=None, upon=None, exactly=None, appx='LAG'):
-    if ex is None:
-        ex = []
-    if upon is not None:
-        result, rname = [], []
-        arra = array[:, [x not in ex for x in names]]
-        for j in range((upon + 1)):
-            re = numpy.roll(arra, shift=j, axis=0)
-            re[:j] = numpy.nan
-            result.append(re)
-            rname.append([x + '_{}{}'.format(appx, j) for x in names if x not in ex])
-        return numpy.concatenate((numpy.concatenate(result, axis=1), array[:, [x in ex for x in names]]),
-                                 axis=1), numpy.concatenate((numpy.concatenate(rname), ex))
-    if exactly is not None:
-        result, rname = [], []
-        arra = array[:, [x not in ex for x in names]]
-        for j in [0, exactly]:
-            re = numpy.roll(arra, shift=j, axis=0)
-            re[:j] = numpy.nan
-            result.append(re)
-            rname.append([x + '_{}{}'.format(appx, j) for x in names if x not in ex])
-        return numpy.concatenate((numpy.concatenate(result, axis=1), array[:, [x in ex for x in names]]),
-                                 axis=1), numpy.concatenate((numpy.concatenate(rname), ex))
-
-
-def to_date_old(x):
-    return datetime.date(int(x[:4]), int(x[5:7]), int(x[8:]))
-
-
-def to_date(x):
-    return x.date()
-
-
-def filler(frame, date_start, date_end, freq, tz):
-    result = pandas.DataFrame(index=pandas.date_range(start=date_start, end=date_end, freq=freq, tz=tz),
-                              data=frame)
-    return result
-
-
-def fill_all(frame, freq, zero_index_name, first_index_name):
-    data = []
-    for ix0 in frame.index.levels[0]:
-        filled = filler(frame=frame.loc[ix0, :], date_start=frame.index.levels[1].min(), date_end=frame.index.levels[1].max(), freq=freq, tz=frame.index.levels[1][0].tz)
-        filled = filled.reset_index()
-        filled[zero_index_name] = ix0
-        filled = filled.rename(columns={'index': first_index_name})
-        data.append(filled)
-    data = pandas.concat(data, axis=0)
-    data = data.set_index(keys=[zero_index_name, first_index_name])
-    return data
-
+            return the_data

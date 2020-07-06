@@ -17,13 +17,19 @@ def sql_formatting(x):
 class Loader:
 
     def __init__(self, api_key, target_quotes, news_horizon, effect_horizon, db_config, reload_quotes=False,
-                 news_titles_source=None, verbose=False, timeit=False, base_option='full', add_time_features=False):
+                 news_titles_source=None, verbose=False, timeit=False, base_option='full', add_time_features=False,
+                 nlp_treator=None, nlp_treator_signature=None, nlp_treator_config=None, nlp_ductor='post'):
 
         self.verbose = verbose
         self.timeit = timeit
         self.run_time = None
         self.base_option = base_option
         self.add_time_features = add_time_features
+
+        self.nlp_treator = nlp_treator
+        self.nlp_treator_signature = nlp_treator_signature
+        self.nlp_treator_config = nlp_treator_config
+        self.nlp_ductor = nlp_ductor
 
         self.api_key = api_key
         self.target_quotes = target_quotes
@@ -107,6 +113,18 @@ class Loader:
 
             self.news_titles_frame['time'] = self.news_titles_frame['time'].apply(func=fixit)
 
+            if self.nlp_treator is not None and self.nlp_ductor == 'pre':
+                old_name = 'title'
+                new_name = 'Text'
+                self.news_titles_frame = self.news_titles_frame.rename(columns={old_name: new_name})
+                self.news_titles_frame = self.nlp_treator(self.news_titles_frame,
+                                                          self.nlp_treator_signature, self.nlp_treator_config)
+
+                self.news_titles_frame = self.nlp_treator(self.news_titles_frame,
+                                                          self.nlp_treator_signature, self.nlp_treator_config)
+
+                self.news_titles_frame = self.news_titles_frame.rename(columns={new_name: old_name})
+
             if self.base_option == 'full':
 
                 self.news_titles_frame.to_sql(name=self.news_titles_raw_alias, con=self.connection, if_exists='replace',
@@ -150,7 +168,8 @@ class Loader:
 
             else:
 
-                self.news_titles_frame = self.news_titles_frame[['id', 'time', 'title']]
+                # self.news_titles_frame = self.news_titles_frame[['id', 'time', 'title']]
+                self.news_titles_frame = self.news_titles_frame.drop(columns=['source', 'category'])
                 lag_markers = list(
                     itertools.product(self.news_titles_frame['id'].values, numpy.array(numpy.arange(self.news_horizon - 1)) + 1))
                 lag_markers = pandas.DataFrame(data=lag_markers, columns=['id', 'lag'])
@@ -530,5 +549,16 @@ class Loader:
             the_data = self.quotes_frame.merge(right=self.news_titles_frame, left_on='time', right_on='time')
 
         the_data = self.time_features(the_data)
+
+        if self.nlp_treator is not None and self.nlp_ductor == 'post':
+            old_name = 'title'
+            new_name = 'Text'
+            the_data['title'] = the_data['title'].fillna('NoData')
+            print('HUGO BOSS')
+            the_data = the_data.rename(columns={old_name: new_name})
+            the_data = self.nlp_treator(the_data,
+                                                      self.nlp_treator_signature, self.nlp_treator_config)
+
+            the_data = the_data.rename(columns={new_name: old_name})
 
         return the_data
