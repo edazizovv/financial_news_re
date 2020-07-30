@@ -278,3 +278,4 @@ def gonet(data_set, y_names, removes, categoricals, net, net_init_params, net_fi
     net.summary(**summary_params)
 
     return None
+
