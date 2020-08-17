@@ -1,4 +1,5 @@
 #
+import numpy
 import pandas
 import datetime
 
@@ -171,14 +172,21 @@ class Compakt:
     def fit(self, array):
 
         for j in range(self.n):
-            self.transformers[j].fit(array[self.masks[j]])
+            self.transformers[j].fit(array[:, self.masks[j]])
 
     def forward(self, array):
 
         array_ = array.copy()
 
         for j in range(self.n):
-            array_ = self.transformers[j].transform(array_[self.masks[j]])
+            # array_ = self.transformers[j].transform(array_[:, self.masks[j]])
+            try:
+                tmp = self.transformers[j].forward(array_[:, self.masks[j]])
+                array_[:, self.masks[j]] = tmp
+            except Exception as e:
+                print(tmp.shape)
+                print(array_[:, self.masks[j]].shape)
+                raise e
 
         return array_
 
@@ -187,16 +195,24 @@ class Compakt:
         array_ = array.copy()
 
         for j in range(self.n):
-            array_ = self.transformers[-j - 1].inverse_transform(array_[self.masks[-j - 1]])
+            # array_ = self.transformers[-j - 1].inverse_transform(array_[:, self.masks[-j - 1]])
+            array_ = self.transformers[-j - 1].backward(array_[:, self.masks[-j - 1]])
 
         return array_
 
 
-def insane(das_model, data, quotes_mask, news_mask, target_mask, multiple_model_args, tsi_names, y_names, removes, test_rate=0.2, n_folds=1):
+def insane(das_model, data, mask_thresh, multiple_model_args, tsi_names, y_names, removes, test_rate=0.2, n_folds=1):
     report = pandas.DataFrame(
         columns=['Np', 'Nf', 'Ns', 'R2_adj_cur_fold', 'R2_adj_nxt_fold', 'R2_adj_test', 'smoother', 'd1', 'params',
                  'd1', 'X_adj_'])
     X_train, Y_train, X_test, Y_test, X_ = load_data(data, y_names, removes, test_rate, n_folds)
+
+    # g_mask = numpy.ones(shape=(X_.shape[0]), dtype=bool)
+    g_mask = numpy.ones(shape=(X_train[0].shape[1]), dtype=bool)
+    quotes_mask, news_mask = g_mask.copy(), g_mask.copy()
+    quotes_mask[mask_thresh:] = False
+    news_mask[:mask_thresh] = False
+    target_mask = numpy.array([True])
 
     maskeds_X = [{Insane(my_name='LnPct'): quotes_mask, Insane(my_name='Nothing'): news_mask},
                {Insane(my_name='TanhLnPct'): quotes_mask, Insane(my_name='Nothing'): news_mask},
@@ -223,6 +239,11 @@ def insane(das_model, data, quotes_mask, news_mask, target_mask, multiple_model_
     n_iters = len(maskeds_X) * len(multiple_model_args) * n_folds
     print('N of expected iters = {0}'.format(n_iters))
     print('Started search: {0}'.format(datetime.datetime.now().isoformat()))
+
+    for j in range(len(X_train)):
+        print('here go those trainers')
+        print(X_train[j].shape)
+        print('say hello')
 
     it = 0
 
@@ -251,21 +272,36 @@ def insane(das_model, data, quotes_mask, news_mask, target_mask, multiple_model_
             for j in range(len(X_train_)):
 
                 model_ = das_model(**params)
-                model_.fit(X_train_[j], Y_train_[j].ravel())
+                # a[~pandas.isna(a).any(axis=1), :]
+                if X_train_[j][~pandas.isna(X_train_[j]).any(axis=1), :].shape[0] == 0:
+                    print(X_train_[j][:, 0:20])
+                    print(X_train_[j][:, 20:40])
+                    print(X_train_[j][:, 40:60])
+                    print(X_train_[j][:, 60:80])
+                    print(X_train_[j][:, 80:100])
+                    print('------------------')
+                    print(X_train[j][:, 0:20])
+                    print(smoother_X_train[j].forward(X_train[j])[:, 0:20])
+                    print(smoother_X_train[j].say_my_name())
+                    raise Exception('Ded Inside')
+                model_.fit(X_train_[j][~pandas.isna(X_train_[j]).any(axis=1), :],
+                           Y_train_[j][~pandas.isna(X_train_[j]).any(axis=1), :].ravel())
 
-                Y_hat_train = smoother_Y_train[j].backward(array=model_.predict(X_train_[j]).reshape(-1, 1))
+                Y_hat_train = smoother_Y_train[j].backward(array=model_.predict(X_train_[j][~pandas.isna(X_train_[j]).any(axis=1), :]))
                 Y_hat_test = smoother_Y_train[j].backward(
-                    array=model_.predict(smoother_X_train[j].forward(array=X_test)).reshape(-1, 1))
+                    array=model_.predict(smoother_X_train[j].forward(array=X_test[~pandas.isna(X_test).any(axis=1), :])).reshape(-1, 1))
 
                 if j < (len(X_train_) - 1):
 
                     Y_hat_ded = smoother_Y_train[j].backward(
-                        array=model_.predict(smoother_X_train[j].forward(array=X_train_[(j + 1)])).reshape(-1, 1))
-                    nxt_folded = r2_adj(Y_train[(j + 1)], Y_hat_ded, X_train_[j].shape[0], X_train_[j].shape[1])
+                        array=model_.predict(smoother_X_train[j].forward(array=X_train_[(j + 1)][~pandas.isna(X_train_[(j + 1)]).any(axis=1), :])).reshape(-1, 1))
+                    nxt_folded = r2_adj(Y_train[(j + 1)][~pandas.isna(X_train_[(j + 1)]).any(axis=1), :], Y_hat_ded,
+                                        X_train_[(j + 1)][~pandas.isna(X_train_[(j + 1)]).any(axis=1), :].shape[0], X_train_[(j + 1)].shape[1])
 
                 else:
 
-                    nxt_folded = r2_adj(Y_test, Y_hat_test, X_train_[j].shape[0], X_train_[j].shape[1])
+                    nxt_folded = r2_adj(Y_test[~pandas.isna(X_test).any(axis=1), :], Y_hat_test,
+                                        X_test[~pandas.isna(X_test).any(axis=1), :].shape[0], X_test.shape[1])
 
                 result = {'Np': i, 'Nf': j, 'Ns': s,
                           'R2_adj_cur_fold': r2_adj(Y_train[j], Y_hat_train, X_train_[j].shape[0],
