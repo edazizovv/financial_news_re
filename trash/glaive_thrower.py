@@ -6,8 +6,8 @@ import pandas
 #
 from mpydge.wrap.new_data import DataHandler, MaskHandler
 from mpydge.chaotic.the_new_pipe import SimplePipe
-from supp import Insane
-from supp import MAE, R2_adj
+from trash.supp import Insane
+from trash.supp import MAE, R2_adj
 
 
 #
@@ -101,4 +101,4 @@ def glaive_thrower(code, models, transformators, data, y_name, removes, news_col
 
                 it += 1
 
-    return report
+    return report, plots

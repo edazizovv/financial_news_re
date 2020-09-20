@@ -5,7 +5,7 @@ import datetime
 
 from m_utils.measures import r2_adj
 
-from thats_the_stuff import load_data
+from trash.thats_the_stuff import load_data
 
 #
 from m_utils.transformations import LogPctTransformer, Whitener, HypeTan  # , Axe  <-- coming soon

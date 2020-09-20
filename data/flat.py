@@ -293,7 +293,7 @@ class Loader:
         await self.prepare_quotes()
         self.quotes_fill()
         self.quotes_lag()
-        self.quotes_percent()
+        # self.quotes_percent()
 
         if self.base_option == 'for_merge':
 
@@ -396,8 +396,11 @@ class Loader:
 
                     data_chunk.columns = [x.replace('_PCT1', '') for x in data_chunk.columns.values]
                     data_chunk = data_chunk.dropna().sort_values(by=['title', 'lag'])
-                    
-                    data_chunk.to_csv(self.where_to_save, sep=';', index=False, mode='a')
+
+                    if j == 0:
+                        data_chunk.to_csv(self.where_to_save, sep=';', index=False, mode='a', header=True)
+                    else:
+                        data_chunk.to_csv(self.where_to_save, sep=';', index=False, mode='a', header=False)
 
         else:
 
