@@ -4,7 +4,7 @@ import time
 import numpy
 import pandas
 import asyncio
-from data.flat import Loader
+from data.flat import SparseLoader
 
 
 #
@@ -29,10 +29,10 @@ news_titles_source = './data/data/rex.xlsx'
 config = Config()
 config.model = {}
 
-loader = Loader(api_key, target_quotes, news_horizon, effect_horizon, db_config, reload_quotes=True,
-                news_titles_source=news_titles_source, verbose=True, base_option='for_merge', add_time_features=True,
-                nlp_treator=embedding_pool, nlp_treator_signature=['use'], nlp_treator_config=config,
-                nlp_ductor='post', export_chunk=100_000)
+loader = SparseLoader(api_key, target_quotes, news_horizon, effect_horizon, db_config, reload_quotes=True,
+                      news_titles_source=news_titles_source, verbose=True, base_option='for_merge', add_time_features=True,
+                      nlp_treator=embedding_pool, nlp_treator_signature=['use'], nlp_treator_config=config,
+                      nlp_ductor='post', export_chunk=100_000)
 # base_option='without'
 
 # data = await loader.read()

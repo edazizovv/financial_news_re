@@ -87,11 +87,15 @@ dta.sample()
 
 # models = [OLR, KNR, DTR, ETR, RFR, SVR, GBR, LBR, XBR]
 # models_names = ['OLR', 'KNR', 'DTR', 'ETR', 'RFR', 'SVR', 'GBR', 'LBR', 'XBR']
-# """
+"""
 models = [OLR, KNR, ETR, RFR]
 models_names = ['OLR', 'KNR', 'ETR', 'RFR']
 models_args = [{'rfe_cv': False, 'n_jobs': -1}] * len(models)
-# """
+# models_args = [{'rfe_cv': False},
+#                {'rfe_cv': False},
+#                {'rfe_cv': False, 'n_jobs': -1},
+#                {'rfe_cv': False, 'n_jobs': -1}]
+"""
 
 pre_kwargs = {'percentile': 50}
 
@@ -99,7 +103,7 @@ pre_kwargs = {'percentile': 50}
 
 # items_args = [pre_kwargs, model_kwargs]
 
-"""
+# """
 models = [SimpleNumericNN, SimpleNumericNN, SimpleNumericNN, SimpleNumericNN,
           SimpleNumericNN, SimpleNumericNN, SimpleNumericNN, SimpleNumericNN]
 
@@ -210,7 +214,7 @@ models_args = [{'rfe_cv': False,
                 'epochs': 500}
                ]
 
-"""
+# """
 for i in range(len(models_names)):
 
     print('Model: {0}'.format(models_names[i]))
@@ -268,12 +272,9 @@ for i in range(len(models_names)):
         report_measures = report_measures.append(pandas.DataFrame(data=report_measures_), ignore_index=True)
         report_values = report_values.append(pandas.DataFrame(data=report_values_), ignore_index=True)
 
-        print(report_measures.memory_usage(deep=True))
-        print(report_values.memory_usage(deep=True))
-
         del pipe, pipe_on_train, pipe_on_test
 
-    report_code = 'simpleA_ex8'
+    report_code = 'simpleA_ex14'
 
     date_now = datetime.datetime.utcnow().replace(tzinfo=pytz.utc)
 
