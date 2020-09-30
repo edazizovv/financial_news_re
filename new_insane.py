@@ -3,7 +3,6 @@ import numpy
 import pandas
 from sklearn.metrics import mean_absolute_error
 from sklearn.feature_selection import RFECV
-from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.linear_model import LinearRegression
 from sklearn.neighbors import KNeighborsRegressor
@@ -11,12 +10,10 @@ from sklearn.ensemble import ExtraTreesRegressor, RandomForestRegressor, Gradien
 from sklearn.svm import SVR as SVR_
 from lightgbm import LGBMRegressor
 from xgboost import XGBRegressor
-
-import torch
 #
 from m_utils.measures import r2_adj
 from m_utils.transformations import LogPctTransformer, Whitener, HypeTan  # , Axe  <-- coming soon
-from neuro_new import WrappedNumericOnlyGene
+
 
 #
 
@@ -587,59 +584,3 @@ class Neakt:
         # print('final')
         # print(array_)
         return array_
-
-
-class SimpleNumericNN:
-
-    def __init__(self, rfe_cv, *args, **kwargs):
-        self.rfe = None
-        self.rfe_cv = rfe_cv
-        self.model = WrappedNumericOnlyGene(*args, **kwargs)
-
-    def fit(self, X, y):
-        Z = numpy.concatenate([X, y.reshape(-1, 1)], axis=1)
-        Z = numpy.array(Z, dtype=numpy.float32)                                                                 # !
-        Z[Z == numpy.inf] = numpy.nan
-        Z[Z == -numpy.inf] = numpy.nan
-        X_, y_ = X[~pandas.isna(Z).any(axis=1), :], y[~pandas.isna(Z).any(axis=1)]
-        if Z.shape[0] != X.shape[0]:
-            print('FIT: the sample contains NaNs, they were dropped\tN of dropped NaNs: {0}'.format(X.shape[0] - X_.shape[0]))
-        del Z, X, y
-        """
-        if self.rfe_cv:
-            self.rfe = RFECV(self.model)
-            self.rfe.fit(X_, y_)
-        else:
-            self.model.fit(X_, y_)
-        """
-
-        X_train, X_val, y_train, y_val = train_test_split(X_, y_, test_size=0.3)
-        y_train, y_val = y_train.reshape(-1, 1), y_val.reshape(-1, 1)
-        del X_, y_
-
-        X_train, X_val = torch.tensor(X_train, dtype=torch.float), torch.tensor(X_val, dtype=torch.float)
-        # y_train_, y_val_ = torch.tensor(y_train, dtype=torch.float).flatten(), torch.tensor(y_val, dtype=torch.float).flatten()
-        y_train, y_val = torch.tensor(y_train, dtype=torch.float), torch.tensor(y_val, dtype=torch.float)
-
-        self.model.fit(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val)
-
-    def predict(self, X):
-        Z = numpy.concatenate([X], axis=1)
-        Z = numpy.array(Z, dtype=numpy.float32)
-        Z[Z == numpy.inf] = numpy.nan
-        Z[Z == -numpy.inf] = numpy.nan
-        nan_mask = ~pandas.isna(Z).any(axis=1)
-        X_ = X[nan_mask, :]
-        if Z.shape[0] != X.shape[0]:
-            print('PREDICT: the sample contains NaNs, they were dropped\tN of dropped NaNs: {0}'.format(X.shape[0] - X_.shape[0]))
-        Z = numpy.full(shape=(X.shape[0], 1), fill_value=numpy.nan, dtype=numpy.float64)
-        """
-        if self.rfe_cv:
-            Z[nan_mask, :] = self.rfe.predict(X_).reshape(-1, 1)
-        else:
-            Z[nan_mask, :] = self.model.predict(X_).reshape(-1, 1)
-        """
-        X_ = torch.tensor(X[nan_mask, :], dtype=torch.float)
-        Z[nan_mask, :] = self.model.predict(X_).reshape(-1, 1)
-
-        return Z
