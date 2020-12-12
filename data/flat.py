@@ -424,10 +424,15 @@ class SparseLoader:
 
 class KernelLoader:
 
-    def __init__(self, api_key, target_quotes, news_horizon, effect_horizon, db_config, reload_quotes=False,
+    def __init__(self, api_key, target_quotes, news_horizon, effect_horizon, db_config,
+                 window_function, window_function_kwargs,
+                 reload_quotes=False,
                  news_titles_source=None, verbose=False, timeit=False, base_option='for_merge', add_time_features=False,
                  nlp_treator=None, nlp_treator_signature=None, nlp_treator_config=None, nlp_ductor='post',
                  export_chunk=100_000):
+
+        self.window_function = window_function
+        self.window_function_kwargs = window_function_kwargs
 
         self.verbose = verbose
         self.timeit = timeit
@@ -523,13 +528,10 @@ class KernelLoader:
 
             self.news_titles_frame['time'] = self.news_titles_frame['time'].apply(func=fixit)
 
-            if self.nlp_treator is not None and self.nlp_ductor == 'pre':
+            if self.nlp_treator is not None:  # and self.nlp_ductor == 'pre':
                 old_name = 'title'
                 new_name = 'Text'
                 self.news_titles_frame = self.news_titles_frame.rename(columns={old_name: new_name})
-                self.news_titles_frame = self.nlp_treator(self.news_titles_frame,
-                                                          self.nlp_treator_signature, self.nlp_treator_config)
-
                 self.news_titles_frame = self.nlp_treator(self.news_titles_frame,
                                                           self.nlp_treator_signature, self.nlp_treator_config)
 
@@ -537,17 +539,21 @@ class KernelLoader:
 
             # self.news_titles_frame = self.news_titles_frame[['id', 'time', 'title']]
             self.news_titles_frame = self.news_titles_frame.drop(columns=['source', 'category'])
+
+            """
             lag_markers = list(
                 itertools.product(self.news_titles_frame['id'].values,
                                   numpy.array(numpy.arange(self.news_horizon - 1)) + 1))
             lag_markers = pandas.DataFrame(data=lag_markers, columns=['id', 'lag'])
             self.news_titles_frame = self.news_titles_frame.merge(right=lag_markers, left_on=['id'],
                                                                   right_on=['id'])
+            """
 
             def minute_offset(x):
                 return pandas.DateOffset(minutes=x)
 
             self.news_titles_frame['time'] = pandas.to_datetime(self.news_titles_frame['time'])
+            """
             self.news_titles_frame['news_time'] = self.news_titles_frame['time'].copy()
             self.news_titles_frame['time'] = self.news_titles_frame['lag'].apply(func=minute_offset)
             self.news_titles_frame['time'] = self.news_titles_frame['news_time'] + self.news_titles_frame['time']
@@ -556,7 +562,7 @@ class KernelLoader:
                 self.news_titles_frame.to_sql(name=self.news_titles_alias, con=self.connection,
                                               if_exists='replace',
                                               index=False)
-
+            """
         if self.timeit:
             self.do_time()
 
@@ -699,12 +705,29 @@ class KernelLoader:
         self.prepare_news_titles_frame()
         await self.prepare_quotes()
         self.quotes_fill()
+
+        vol_cols = [x for x in self.quotes_frame.columns.values if 'volume' in x]
+        self.quotes_frame[vol_cols] = self.quotes_frame[vol_cols].fillna(value=0)
+        self.quotes_frame = self.quotes_frame.fillna(method='pad')
+
         self.quotes_lag()
         # self.quotes_percent()
 
-        result = self.quotes_frame.merge(how='left', right=self.news_titles_frame, left_on='time', right_on='time')
+        self.news_titles_frame = self.news_titles_frame.drop(columns=['id', 'title'])
+        self.news_titles_frame = self.news_titles_frame.groupby(by='time').mean()
+
+        news_titles_columns = [x for x in self.news_titles_frame.columns.values if x != 'time']
+        result = self.quotes_frame.merge(right=self.news_titles_frame, how='left', left_on='time', right_index=True) # right_on='time')
+
+        use_cols = [x for x in result.columns.values if 'USE' in x]
+        result[use_cols] = result[use_cols].fillna(value=0)
 
         # here go these windows
-        # result = result.?
+        if self.window_function == 'ewm':
+            result[news_titles_columns] = result[news_titles_columns].ewm(**self.window_function_kwargs).mean()
+        elif self.window_function == 'rolling':
+            result[news_titles_columns] = result[news_titles_columns].rolling(**self.window_function_kwargs).mean()
+        else:
+            raise Exception("Misunderstood windows function")
 
         return result
