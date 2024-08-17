@@ -1,0 +1,29 @@
+[tool.poetry]
+name = "financial_news_re"
+version = "0.0.1"
+description = "Financial news embedding project"
+authors = [
+  "edazizovv",
+]
+license = "MIT"
+readme = "README.md"
+packages = [{include = "financial_news_re"}]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+numpy = "^2.0.1"
+pandas = "^2.2.2"
+scipy = "^1.14.0"
+matplotlib = "^3.9.2"
+seaborn = "^0.13.2"
+scikit-learn = "^1.5.1"
+xgboost = "^2.1.1"
+boruta = "^0.4.3"
+psycopg2 = "^2.9.9"
+sqlalchemy = "^2.0.32"
+torch = "^2.4.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
